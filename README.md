@@ -25,10 +25,15 @@ Firebase Authentication, Firestore DB, 보안 규칙, 최초 학교/관리자 �
 ```sh
 node scripts/admin-bootstrap.mjs create-school --key <service-account.json> --school jobedu-5c8fb --name "마동초등학교"
 node scripts/admin-bootstrap.mjs create-teacher --key <service-account.json> --school jobedu-5c8fb --email teacher@example.com --password <비밀번호>
-node scripts/admin-bootstrap.mjs create-student-accounts --key <service-account.json> --school jobedu-5c8fb --code jobedu-5c8fb
+node scripts/admin-bootstrap.mjs create-student-accounts --key <service-account.json> --school jobedu-5c8fb --code madong [--password <신규 계정 공통 비밀번호>]
+node scripts/admin-bootstrap.mjs reset-student-password --key <service-account.json> --school jobedu-5c8fb --code madong --grade <학년> --name <이름> [--password <새 비밀번호>]
 ```
 
-`create-student-accounts`는 같은 학년에 동명이인이 있는지 먼저 검사한 뒤(있으면 알리고 중단), 이미 명단 가져오기(RosterImport)로 등록된 학생마다 계정이 없으면 만들고 학년·이름·자동 생성된 6자리 비밀번호를 `student-accounts.csv`로 출력합니다(재실행해도 기존 계정은 건너뜁니다). 서비스 계정 키(`*firebase-adminsdk*.json`)와 이 CSV는 `.gitignore`에 이미 포함되어 있습니다 — 그래도 직접 다른 곳에 붙여넣거나 공유하지 마세요.
+`--code`(학교 코드)는 학생이 로그인 화면에서 입력하는 값으로, Firestore의 `--school` 아이디와 별개로 우리가 정하는 아무 문자열이면 됩니다(예: `madong`). 태블릿 URL에 `?school=madong`을 붙여두면 학생은 학년·이름·비밀번호만 입력하면 됩니다.
+
+`create-student-accounts`는 같은 학년에 동명이인이 있는지 먼저 검사한 뒤(있으면 알리고 중단), 이미 명단 가져오기(RosterImport)로 등록된 학생마다 계정이 없으면 만들고 학년·이름·비밀번호를 `student-accounts.csv`로 출력합니다(재실행해도 기존 계정은 건너뜁니다). `--password`를 주면 이번에 새로 만드는 계정 전부가 그 비밀번호로 생성됩니다(테스트용 — 자동 생성되는 임의 6자리 비밀번호 대신). 서비스 계정 키(`*firebase-adminsdk*.json`)와 이 CSV는 `.gitignore`에 이미 포함되어 있습니다 — 그래도 직접 다른 곳에 붙여넣거나 공유하지 마세요.
+
+Firebase는 한 번 설정된 비밀번호를 관리자도 다시 읽어올 수 없습니다(해시만 저장됨). 그래서 이 스크립트가 만들거나 바꾼 비밀번호는 모두 로컬 "비밀번호 장부"(`.student-passwords.json`, git 추적 제외)에 남기고 실행할 때마다 `student-accounts.csv`를 그 장부 기준으로 새로 씁니다 — CSV를 열어보면 항상 각 학생의 최신 비밀번호를 볼 수 있습니다. 특정 학생의 비밀번호를 바꾸고 싶으면 `reset-student-password`를 실행하면 됩니다(서비스 계정 키가 있는 관리자만 실행할 수 있는 오프라인 도구입니다). 교사 계정은 이와 별개로 로그인 후 "운영 현황" 화면에서 스스로 비밀번호를 바꿀 수 있습니다.
 
 학생 화면은 지도형 홈(`마이페이지`/`은행`/`상점` 등 건물 hotspot)이며, 실제로 동작하는 기능은 지도의 **마동초등학교(마이페이지)** 건물에 연결되어 있습니다. 다른 건물은 아직 "다음 단계에서 연결됩니다" 안내만 표시합니다.
 

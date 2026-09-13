@@ -16,3 +16,4 @@ coverage/
 *.tsv
 *.xlsx
 !tests/fixtures/*.csv
+.student-passwords.json
