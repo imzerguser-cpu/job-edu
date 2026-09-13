@@ -3,6 +3,7 @@ import {onAuthStateChanged,signInWithEmailAndPassword,signOut,type User} from 'f
 import {firebase} from '../data/firebase';
 import {getCitizen,listSchools,listStudents,openSchool,updateStudent} from '../data/schoolRepository';
 import {isTeacher,type School,type SchoolContext,type Student} from '../domain/model';
+import {studentLoginEmail} from '../domain/studentAuth';
 import {Demo} from '../features/jobs/Demo';
 import {CareerWorkspace} from '../features/jobs/CareerWorkspace';
 import {firestoreCareers} from '../data/careerRepository';
@@ -54,9 +55,37 @@ export function App(){
 }
 function Login({onError}:{onError:(s:string)=>void}){
   const [busy,setBusy]=useState(false);
-  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!firebase)return;setBusy(true);onError('');const f=new FormData(e.currentTarget);
-    try{await firebase.ready;await signInWithEmailAndPassword(firebase.auth,String(f.get('email')),String(f.get('password')))}catch(err){onError(readableError(err))}finally{setBusy(false)}}
-  return <section className="login-grid"><div className="welcome"><span className="eyebrow">학교 시민생활</span><h1>우리 손으로 만드는<br/>작은 사회</h1><p>나의 역할을 찾고, 함께 일하고,<br/>우리에게 필요한 변화를 만들어요.</p><div className="journey"><span>시민</span><span>직업</span><span>함께하는 생활</span></div></div><form className="panel" onSubmit={submit}><h2>학교 계정으로 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p><label>계정 이메일<input type="email" name="email" autoComplete="username" required/></label><label>비밀번호<input type="password" name="password" autoComplete="current-password" required/></label><button className="button primary full" disabled={busy}>{busy?'확인 중…':'로그인'}</button><p className="muted">공용 태블릿에서는 이용 후 로그아웃해 주세요.</p></form></section>;
+  const [mode,setMode]=useState<'student'|'teacher'>('student');
+  const defaultSchoolCode=useMemo(()=>new URLSearchParams(window.location.search).get('school')??'',[]);
+  async function submit(e:FormEvent<HTMLFormElement>){
+    e.preventDefault();if(!firebase)return;setBusy(true);onError('');const f=new FormData(e.currentTarget);
+    try{
+      await firebase.ready;
+      const email=mode==='teacher'
+        ?String(f.get('email'))
+        :studentLoginEmail(String(f.get('schoolCode')),String(f.get('grade')),String(f.get('name')));
+      await signInWithEmailAndPassword(firebase.auth,email,String(f.get('password')));
+    }catch(err){onError(readableError(err))}
+    finally{setBusy(false)}
+  }
+  return <section className="login-grid"><div className="welcome"><span className="eyebrow">학교 시민생활</span><h1>우리 손으로 만드는<br/>작은 사회</h1><p>나의 역할을 찾고, 함께 일하고,<br/>우리에게 필요한 변화를 만들어요.</p><div className="journey"><span>시민</span><span>직업</span><span>함께하는 생활</span></div></div>
+    <form className="panel" onSubmit={submit}>
+      <div className="tabs" role="tablist" aria-label="로그인 방식">
+        <button type="button" className={mode==='student'?'tab active':'tab'} aria-pressed={mode==='student'} onClick={()=>setMode('student')}>학생</button>
+        <button type="button" className={mode==='teacher'?'tab active':'tab'} aria-pressed={mode==='teacher'} onClick={()=>setMode('teacher')}>선생님</button>
+      </div>
+      {mode==='student'
+        ?<><h2>학생 로그인</h2><p>선생님께 안내받은 학교 코드와 비밀번호로 로그인해요. 이메일은 필요 없어요.</p>
+          <label>학교 코드<input name="schoolCode" defaultValue={defaultSchoolCode} autoComplete="off" required maxLength={40}/></label>
+          <label>학년<select name="grade" defaultValue="" required><option value="" disabled>학년 선택</option>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label>
+          <label>이름<input name="name" autoComplete="username" required maxLength={40}/></label></>
+        :<><h2>선생님 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p>
+          <label>계정 이메일<input type="email" name="email" autoComplete="username" required/></label></>}
+      <label>비밀번호<input type="password" name="password" autoComplete="current-password" required/></label>
+      <button className="button primary full" disabled={busy}>{busy?'확인 중…':'로그인'}</button>
+      <p className="muted">공용 태블릿에서는 이용 후 로그아웃해 주세요.</p>
+    </form>
+  </section>;
 }
 function Setup({onDemo}:{onDemo:()=>void}){return <div className="shell"><header className="header"><div className="brand"><span className="brand-mark">M</span>작은 사회</div></header><main><section className="panel"><h1>우리 학교 연결을 준비하고 있어요</h1><p>가상 시민으로 직업 신청과 배정을 먼저 체험할 수 있습니다.</p><button className="button primary section" onClick={onDemo}>가상 시민으로 직업 체험하기</button></section></main></div>}
 function SchoolWorkspace({context,school}:{context:SchoolContext;school:School}){

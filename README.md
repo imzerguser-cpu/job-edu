@@ -16,6 +16,20 @@ Firebase Authentication, Firestore DB, 보안 규칙, 최초 학교/관리자 �
 
 로그인 아래 **가상 시민으로 직업 체험하기**에서 학생 신청 → 교사 체험 → 신청 승인 → 학생 내 직업을 확인할 수 있습니다. 데모는 메모리만 사용하며 실제 Firebase 쓰기를 호출하지 않습니다.
 
+학생은 이메일이 필요 없습니다. 로그인 화면의 "학생" 탭에서 **학교 코드·학년·이름 + 비밀번호**로 로그인합니다(내부적으로만 합성 이메일을 만들어 Firebase Auth에 전달, `docs/DECISIONS.md` D-44). 교사는 기존처럼 이메일로 로그인합니다. 태블릿 URL에 `?school=학교코드`를 붙여 두면 학생은 학년·이름·비밀번호만 입력하면 됩니다. (학년당 반이 하나뿐인 학교 기준입니다 — 학년당 반이 여러 개면서 동명이인이 있는 학교는 `create-student-accounts`가 충돌을 감지해 알려줍니다.)
+
+## 계정 만들기 (관리자 도구)
+
+멤버십 쓰기는 앱에서 전부 거부되어 있어(D-5), 학교·교사·학생 로그인 계정은 서비스 계정 키로 실행하는 오프라인 스크립트로 만듭니다:
+
+```sh
+node scripts/admin-bootstrap.mjs create-school --key <service-account.json> --school jobedu-5c8fb --name "마동초등학교"
+node scripts/admin-bootstrap.mjs create-teacher --key <service-account.json> --school jobedu-5c8fb --email teacher@example.com --password <비밀번호>
+node scripts/admin-bootstrap.mjs create-student-accounts --key <service-account.json> --school jobedu-5c8fb --code jobedu-5c8fb
+```
+
+`create-student-accounts`는 같은 학년에 동명이인이 있는지 먼저 검사한 뒤(있으면 알리고 중단), 이미 명단 가져오기(RosterImport)로 등록된 학생마다 계정이 없으면 만들고 학년·이름·자동 생성된 6자리 비밀번호를 `student-accounts.csv`로 출력합니다(재실행해도 기존 계정은 건너뜁니다). 서비스 계정 키(`*firebase-adminsdk*.json`)와 이 CSV는 `.gitignore`에 이미 포함되어 있습니다 — 그래도 직접 다른 곳에 붙여넣거나 공유하지 마세요.
+
 학생 화면은 지도형 홈(`마이페이지`/`은행`/`상점` 등 건물 hotspot)이며, 실제로 동작하는 기능은 지도의 **마동초등학교(마이페이지)** 건물에 연결되어 있습니다. 다른 건물은 아직 "다음 단계에서 연결됩니다" 안내만 표시합니다.
 
 ## 현재 구현
