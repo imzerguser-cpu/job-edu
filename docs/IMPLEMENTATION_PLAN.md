@@ -277,4 +277,10 @@ Spark에서 유료 Functions를 사용하지 않으므로 처음에는 **학생 
 
 2026-09-13: §6의 금융 무결성 설계를 실제로 구현했다. 범위는 **월급 정산 한 가지 거래 종류**로 좁혔다: `accounts`(학생 계좌 + 학교 발행 계좌 `system-issuer`), `journals`(SALARY 전용, 불변, ID 자체가 멱등키), 계좌별 `entries` 서브컬렉션(학생 자기 명세). 교사가 정산 월을 고르면 미리보기(직업별 월급 × 해당 직업의 활성 배정 학생) → 확정 순서로 진행하며, Cloud Functions 없이 교사 세션에서 트랜잭션으로 처리한다(§28-29 원칙 그대로).
 
-저축·대출·세금·과태료·구매·`financialRequests`/`financeReviews`(학생 요청·은행원 검증) 워크플로는 아직 없다. 다형적 journal 스키마(sourceType/sourceId/policyVersionId, 여러 거래 종류를 한 형태로)와 별도의 `operationKeys` 컬렉션도 아직 도입하지 않았다 — 지금은 SALARY 하나뿐이라 필요가 없고, 다음 거래 종류가 추가될 때 실제 필요에 맞춰 일반화한다. 자세한 근거는 `docs/DECISIONS.md` D-17~D-21.
+저축·대출·세금·과태료·`financialRequests`/`financeReviews`(학생 요청·은행원 검증) 워크플로는 아직 없다. 다형적 journal 스키마(sourceType/sourceId/policyVersionId, 여러 거래 종류를 한 형태로)와 별도의 `operationKeys` 컬렉션도 아직 도입하지 않았다 — 지금은 SALARY/PURCHASE 두 가지뿐이라 필요가 없고, 다음 거래 종류가 추가될 때 실제 필요에 맞춰 일반화한다. 자세한 근거는 `docs/DECISIONS.md` D-17~D-21.
+
+## 16. 사업·상점(구매) 1차 구현 범위 (신규)
+
+2026-09-13: `businesses`/`products` + 두 번째 journal 종류 PURCHASE를 추가했다. 월급과 달리 **구매는 학생이 즉시 실행**한다(교사 정산 없음) — 가격·재고·잔액을 그 자리에서 Rules가 재검증하기 때문에 안전하다(D-23). 사업은 교사가 직접 만들며 시민 제안 승인 절차는 아직 연결되지 않았다(D-22, 6단계 대기). 수량은 1개 고정, 별도 `orders` 컬렉션 없이 journal + 계좌별 entries가 곧 구매 기록이다(D-24).
+
+이 단계에서 실제 Rules 버그 두 가지를 에뮬레이터 테스트로 발견해 고쳤다 — 둘 다 다음 금융 기능(저축·대출)에서 재발할 수 있는 패턴이므로 `docs/DECISIONS.md` D-26을 반드시 참고: (1) 같은 트랜잭션에서 만드는 문서는 `exists()`가 아니라 `getAfter()`로 확인해야 한다, (2) 여러 계좌를 넘나드는 트랜잭션의 당사자는 상대 계좌를 최소한 읽을 수 있어야 정확한 증가분을 계산해 쓸 수 있다.
