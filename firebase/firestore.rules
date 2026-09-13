@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function memberPath(sid) { return /databases/$(database)/documents/schools/$(sid)/members/$(request.auth.uid); }
+    function active(sid) {
+      return signedIn() && exists(memberPath(sid))
+        && get(memberPath(sid)).data.schoolId == sid
+        && get(memberPath(sid)).data.status == 'active';
+    }
+    function teacher(sid) { return active(sid) && get(memberPath(sid)).data.role in ['teacher','owner']; }
+    function ownStudent(sid,studentId) { return active(sid) && get(memberPath(sid)).data.role == 'student' && get(memberPath(sid)).data.studentId == studentId; }
+    function studentShape(sid) {
+      let d = request.resource.data;
+      return d.keys().hasAll(['schoolId','name','grade','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
+        && d.keys().hasOnly(['schoolId','name','grade','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
+        && d.schoolId == sid && d.schemaVersion == 1
+        && d.name is string && d.name.size() > 0 && d.name.size() <= 40
+        && d.grade is int && d.grade >= 1 && d.grade <= 6
+        && (d.className == null || (d.className is string && d.className.size() <= 20))
+        && d.citizenCode is string && d.citizenCode.size() > 0 && d.citizenCode.size() <= 50
+        && d.schoolYear is int && d.schoolYear >= 2020 && d.schoolYear <= 2100
+        && d.status in ['active','graduated','transferred']
+        && d.createdAt is timestamp && d.updatedAt == request.time;
+    }
+    match /userSchools/{uid}/links/{sid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false; // trusted provisioning only; never used as authorization
+    }
+    match /schools/{sid} {
+      allow get: if active(sid);
+      allow list, create, delete: if false;
+      allow update: if teacher(sid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','updatedAt'])
+        && request.resource.data.schoolName is string && request.resource.data.schoolName.size() > 0 && request.resource.data.schoolName.size() <= 80
+        && request.resource.data.communityName is string && request.resource.data.communityName.size() > 0 && request.resource.data.communityName.size() <= 80
+        && request.resource.data.currencyName is string && request.resource.data.currencyName.size() > 0 && request.resource.data.currencyName.size() <= 20
+        && request.resource.data.currencySymbol is string && request.resource.data.currencySymbol.size() <= 10
+        && request.resource.data.updatedAt == request.time;
+      match /members/{uid} {
+        allow get: if active(sid) && (request.auth.uid == uid || teacher(sid));
+        allow list: if teacher(sid);
+        allow write: if false;
+      }
+      match /students/{studentId} {
+        allow get: if teacher(sid) || ownStudent(sid,studentId);
+        allow list: if teacher(sid) && request.query.limit != null && request.query.limit <= 100;
+        allow create: if teacher(sid) && studentShape(sid)
+          && request.resource.data.createdAt == request.time && request.resource.data.status == 'active';
+        allow update: if teacher(sid) && studentShape(sid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','grade','className','schoolYear','status','updatedAt']);
+        allow delete: if false;
+      }
+      match /importBatches/{batchId} {
+        allow read: if teacher(sid);
+        allow create: if teacher(sid)
+          && request.resource.data.keys().hasOnly(['schoolId','actorUid','acceptedCount','status','createdAt','schemaVersion'])
+          && request.resource.data.schoolId == sid && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.schemaVersion == 1 && request.resource.data.status == 'completed'
+          && request.resource.data.acceptedCount is int && request.resource.data.acceptedCount > 0 && request.resource.data.acceptedCount <= 50
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+      }
+      function bounded() { return request.query.limit != null && request.query.limit <= 100; }
+      function pairOwner(id) {
+        return active(sid) && get(memberPath(sid)).data.role == 'student'
+          && id.matches('^[A-Za-z0-9_-]+~' + get(memberPath(sid)).data.studentId + '$');
+      }
+      function jobPath(id) { return /databases/$(database)/documents/schools/$(sid)/jobs/$(id); }
+      function assignmentPath(id) { return /databases/$(database)/documents/schools/$(sid)/jobAssignments/$(id); }
+      function jobShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','departmentId','name','description','core','status','recommendedGrades','icon','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','departmentId','name','description','core','status','recommendedGrades','icon','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1 && d.core is bool
+          && d.departmentId in ['economy','media','life','culture']
+          && d.name is string && d.name.size()>0 && d.name.size()<=60
+          && d.description is string && d.description.size()>0 && d.description.size()<=1000
+          && d.status in ['preparing','recruiting','active','paused','closed']
+          && d.recommendedGrades is list && d.recommendedGrades.size()>0 && d.recommendedGrades.size()<=6
+          && d.recommendedGrades.toSet().size()==d.recommendedGrades.size()
+          && d.recommendedGrades.hasOnly([1,2,3,4,5,6])
+          && d.icon in ['banker','tax_accounting','store_manager','cafe_worker','real_estate','business_manager','journalist','photographer','writer','webtoon_artist','painter','digital_manager','dj','library_manager','environment_manager','plant_manager','safety_manager','rules_manager','milk_delivery','parcel_delivery','school_notice','noticeboard_manager','event_planner','music','singer','dancer','board_game','culture_play']
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      match /jobs/{jobId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if teacher(sid) && jobId.matches('^[A-Za-z0-9_-]{1,100}$') && jobShape() && request.resource.data.createdAt==request.time;
+        allow update: if teacher(sid) && jobShape() && resource.data.status!='closed'
+          && (!resource.data.core || request.resource.data.core)
+          && request.resource.data.createdAt==resource.data.createdAt;
+        allow delete: if false;
+      }
+      match /jobApplications/{applicationId} {
+        allow get: if teacher(sid) || pairOwner(applicationId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.studentId));
+        allow create: if ownStudent(sid,request.resource.data.studentId)
+          && request.resource.data.keys().hasAll(['schoolId','jobId','studentId','reason','status','reviewNote','reviewerUid','reviewedAt','submittedAt','schemaVersion'])
+          && request.resource.data.keys().hasOnly(['schoolId','jobId','studentId','reason','status','reviewNote','reviewerUid','reviewedAt','submittedAt','schemaVersion'])
+          && request.resource.data.schoolId==sid && request.resource.data.schemaVersion==1
+          && request.resource.data.jobId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && request.resource.data.studentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && applicationId==request.resource.data.jobId+'~'+request.resource.data.studentId
+          && get(jobPath(request.resource.data.jobId)).data.status=='recruiting'
+          && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.studentId)).data.status=='active'
+          && (!exists(assignmentPath(applicationId)) || get(assignmentPath(applicationId)).data.status!='active')
+          && request.resource.data.reason is string && request.resource.data.reason.size()>0 && request.resource.data.reason.size()<=500
+          && request.resource.data.status=='submitted' && request.resource.data.reviewNote==''
+          && request.resource.data.reviewerUid==null && request.resource.data.reviewedAt==null
+          && request.resource.data.submittedAt==request.time;
+        allow update: if teacher(sid) && resource.data.status=='submitted'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewNote','reviewerUid','reviewedAt'])
+          && request.resource.data.reviewNote is string && request.resource.data.reviewNote.size()<=500
+          && request.resource.data.reviewerUid==request.auth.uid && request.resource.data.reviewedAt==request.time
+          && ((request.resource.data.status=='rejected' && request.resource.data.reviewNote.size()>0)
+            || (request.resource.data.status=='approved'
+              && get(jobPath(resource.data.jobId)).data.status in ['recruiting','active']
+              && getAfter(assignmentPath(applicationId)).data.status=='active'
+              && getAfter(assignmentPath(applicationId)).data.studentId==resource.data.studentId
+              && getAfter(assignmentPath(applicationId)).data.jobId==resource.data.jobId));
+        allow delete: if false;
+      }
+      function assignmentShape(id) {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','jobId','studentId','status','schemaVersion','startAt','endAt','assignedBy','updatedAt'])
+          && d.keys().hasOnly(['schoolId','jobId','studentId','status','schemaVersion','startAt','endAt','assignedBy','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.jobId.matches('^[A-Za-z0-9_-]{1,100}$') && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && id==d.jobId+'~'+d.studentId && d.updatedAt==request.time;
+      }
+      function newAssignment(id) {
+        let d=request.resource.data;
+        return assignmentShape(id) && d.status=='active' && d.startAt==request.time && d.endAt==null
+          && d.assignedBy==request.auth.uid && get(jobPath(d.jobId)).data.status in ['recruiting','active']
+          && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active';
+      }
+      match /jobAssignments/{assignmentId} {
+        allow get: if teacher(sid) || pairOwner(assignmentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.studentId));
+        allow create: if teacher(sid) && newAssignment(assignmentId);
+        allow update: if teacher(sid) && assignmentShape(assignmentId)
+          && request.resource.data.jobId==resource.data.jobId && request.resource.data.studentId==resource.data.studentId
+          && ((resource.data.status=='ended' && newAssignment(assignmentId))
+            || (resource.data.status=='active' && request.resource.data.status=='ended' && request.resource.data.endAt==request.time
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endAt','updatedAt'])));
+        allow delete: if false;
+      }
+      // Each future feature receives explicit rules and emulator tests before activation.
+      // No teacher wildcard: even teachers cannot edit an existing journal or balance here.
+      match /{document=**} { allow read, write: if false; }
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

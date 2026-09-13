@@ -1,0 +1,58 @@
+import {useEffect,useMemo,useRef,useState,type FormEvent} from 'react';
+import {onAuthStateChanged,signInWithEmailAndPassword,signOut,type User} from 'firebase/auth';
+import {firebase} from '../data/firebase';
+import {getCitizen,listSchools,listStudents,openSchool} from '../data/schoolRepository';
+import {isTeacher,type School,type SchoolContext,type Student} from '../domain/model';
+import {Demo} from '../features/jobs/Demo';
+import {CareerWorkspace} from '../features/jobs/CareerWorkspace';
+import {firestoreCareers} from '../data/careerRepository';
+import {RosterImport} from '../features/roster/RosterImport';
+
+function readableError(error:unknown){
+  const code=(error as {code?:string}).code;
+  if(code==='auth/configuration-not-found'||code==='auth/operation-not-allowed')return '학교 로그인 설정을 준비하고 있습니다. 관리자에게 문의하거나 가상 시민 체험을 이용해 주세요.';
+  if(code==='auth/invalid-credential'||code==='auth/user-not-found'||code==='auth/wrong-password')return '계정과 비밀번호를 확인해 주세요.';
+  if(code==='permission-denied')return '접근 권한을 확인할 수 없습니다. 학교 관리자에게 문의해 주세요.';
+  if(code==='unavailable'||code==='auth/network-request-failed')return '연결을 확인한 뒤 다시 시도해 주세요.';
+  if(code==='auth/too-many-requests')return '로그인 시도가 많습니다. 잠시 후 다시 시도해 주세요.';
+  return error instanceof Error?error.message:'처리하지 못했습니다. 다시 시도해 주세요.';
+}
+export function App(){
+  const [demo,setDemo]=useState(false);
+  const [user,setUser]=useState<User|null>(null),[loading,setLoading]=useState(!!firebase),[error,setError]=useState('');
+  const [links,setLinks]=useState<{schoolId:string;schoolName:string}[]>([]),[active,setActive]=useState<{context:SchoolContext;school:School}|null>(null);
+  const generation=useRef(0);
+  useEffect(()=>{
+    if(!firebase)return;const client=firebase;
+    return onAuthStateChanged(client.auth,async next=>{
+      const token=++generation.current;setUser(next);setActive(null);setLinks([]);setError('');setLoading(!!next);
+      if(next){try{const schools=await listSchools(client.db,next.uid);if(token===generation.current)setLinks(schools)}catch(e){if(token===generation.current)setError(readableError(e))}}
+      if(token===generation.current)setLoading(false);
+    });
+  },[]);
+  async function selectSchool(sid:string){
+    if(!firebase||!user)return;const token=++generation.current;setLoading(true);setError('');setActive(null);
+    try{const a=await openSchool(firebase.db,user.uid,sid);if(token===generation.current)setActive(a)}catch(e){if(token===generation.current)setError(readableError(e))}
+    if(token===generation.current)setLoading(false);
+  }
+  async function logout(){if(!firebase)return;generation.current++;setActive(null);setLinks([]);setUser(null);try{await signOut(firebase.auth)}catch(e){setError(readableError(e))}}
+  if(demo)return <Demo onExit={()=>setDemo(false)}/>;
+  if(!firebase)return <Setup onDemo={()=>setDemo(true)}/>;
+  return <div className="shell"><header className="header"><a className="brand" href="/" aria-label="작은 사회 처음으로"><span className="brand-mark">M</span><span>{active?.school.communityName??'작은 사회'}</span></a><div className="header-actions">{active&&<button className="button quiet" onClick={()=>{generation.current++;setActive(null)}}>학교 변경</button>}{user&&<button className="button quiet" onClick={logout}>로그아웃</button>}</div></header>
+    <main>{error&&<p role="alert" className="error">{error}</p>}{loading?<section className="panel"><p role="status">학교 정보를 확인하고 있어요.</p></section>:!user?<><Login onError={setError}/><div className="demo-entry"><button className="button secondary" onClick={()=>setDemo(true)}>가상 시민으로 직업 체험하기</button><p className="muted">실제 학생 정보 없이 신청과 배정을 확인해요.</p></div></>:!active?<section className="panel narrow"><span className="eyebrow">학교 선택</span><h1>나의 작은 사회로</h1><p>등록된 학교를 선택해 주세요.</p>{links.length?links.map(l=><button className="school-choice" key={l.schoolId} onClick={()=>selectSchool(l.schoolId)}>{l.schoolName}<span aria-hidden="true">→</span></button>):<div className="notice">연결된 학교가 없습니다. 학교 관리자에게 계정 등록을 요청해 주세요.</div>}</section>:<SchoolWorkspace key={`${user.uid}/${active.context.schoolId}`} {...active}/>}</main></div>;
+}
+function Login({onError}:{onError:(s:string)=>void}){
+  const [busy,setBusy]=useState(false);
+  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();if(!firebase)return;setBusy(true);onError('');const f=new FormData(e.currentTarget);
+    try{await firebase.ready;await signInWithEmailAndPassword(firebase.auth,String(f.get('email')),String(f.get('password')))}catch(err){onError(readableError(err))}finally{setBusy(false)}}
+  return <section className="login-grid"><div className="welcome"><span className="eyebrow">학교 시민생활</span><h1>우리 손으로 만드는<br/>작은 사회</h1><p>나의 역할을 찾고, 함께 일하고,<br/>우리에게 필요한 변화를 만들어요.</p><div className="journey"><span>시민</span><span>직업</span><span>함께하는 생활</span></div></div><form className="panel" onSubmit={submit}><h2>학교 계정으로 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p><label>계정 이메일<input type="email" name="email" autoComplete="username" required/></label><label>비밀번호<input type="password" name="password" autoComplete="current-password" required/></label><button className="button primary full" disabled={busy}>{busy?'확인 중…':'로그인'}</button><p className="muted">공용 태블릿에서는 이용 후 로그아웃해 주세요.</p></form></section>;
+}
+function Setup({onDemo}:{onDemo:()=>void}){return <div className="shell"><header className="header"><div className="brand"><span className="brand-mark">M</span>작은 사회</div></header><main><section className="panel"><h1>우리 학교 연결을 준비하고 있어요</h1><p>가상 시민으로 직업 신청과 배정을 먼저 체험할 수 있습니다.</p><button className="button primary section" onClick={onDemo}>가상 시민으로 직업 체험하기</button></section></main></div>}
+function SchoolWorkspace({context,school}:{context:SchoolContext;school:School}){
+  const store=useMemo(()=>firestoreCareers(firebase!.db,context),[context]);
+  const teacher=isTeacher(context.membership),[students,setStudents]=useState<Student[]>([]),[citizen,setCitizen]=useState<Student|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0),[importing,setImporting]=useState(false);
+  useEffect(()=>{let alive=true;setLoading(true);setStudents([]);setCitizen(null);setError('');const client=firebase!;
+    (teacher?listStudents(client.db,context).then(s=>{if(alive)setStudents(s)}):getCitizen(client.db,context).then(s=>{if(alive)setCitizen(s)})).catch(e=>{if(alive)setError(readableError(e))}).finally(()=>{if(alive)setLoading(false)});return()=>{alive=false};
+  },[context,teacher,refresh]);
+  return <><div className="page-heading"><div><span className="eyebrow">{school.schoolName}</span><h1>{teacher?'시민 관리':'나의 시민증'}</h1><p>{teacher?'우리 학교 시민의 등록 상태를 확인합니다.':'학교 안에서 나의 역할을 시작해요.'}</p></div><span className="tag">{teacher?'교사 운영실':'학생 공간'}</span></div>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:teacher?<><section className="panel"><div className="section-heading"><h2>학생 명단 <span className="count">{students.length}</span></h2><div className="header-actions"><button className="button quiet" onClick={()=>setRefresh(n=>n+1)}>새로고침</button><button className="button primary" onClick={()=>setImporting(!importing)}>명단 가져오기</button></div></div>{students.length===100&&<p className="notice">현재 이름순 첫 100명입니다. 대규모 명단은 다음 관리 단계에서 페이지 조회를 확장합니다.</p>}{students.length?<div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>반</th><th>학년도</th><th>상태</th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td>{s.name}</td><td>{s.grade}학년</td><td>{s.className??'미지정'}</td><td>{s.schoolYear}</td><td>{s.status==='active'?'활동 중':s.status==='graduated'?'졸업':'전출'}</td></tr>)}</tbody></table></div>:<div className="empty">등록된 학생이 없습니다. 명단을 확인한 뒤 가져와 주세요.</div>}</section>{importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}</>:citizen?<section className="citizen-card"><span className="eyebrow">CITIZEN CARD</span><h2>{citizen.name}</h2><p>{citizen.grade}학년 · {citizen.className??'반 미지정'}</p><div className="citizen-footer"><div><small>우리 사회</small><p>{school.communityName}</p></div><div><small>시민 코드</small><p className="citizen-code">{citizen.citizenCode}</p></div></div></section>:null}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={teacher} students={students} studentId={context.membership.studentId??undefined}/></div><div className="notice section">업무 인증·은행·시민광장은 다음 단계에서 연결합니다. 현재 실제 금융 거래를 처리하지 않습니다.</div></>;
+}

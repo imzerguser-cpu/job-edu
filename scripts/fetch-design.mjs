@@ -1,0 +1,4 @@
+import {mkdir,writeFile} from 'node:fs/promises';
+const assets=[{id:'19b3AE0dYsnqGuopq6zScyXSJlge10k12',name:'school-front.png',image:true},{id:'1ZsaISjWRyBC6bsPfj4Jk2R7JUHgfNile',name:'source-readme.txt',image:false}];
+await mkdir('public/assets',{recursive:true});await mkdir('docs',{recursive:true});
+for(const a of assets){const response=await fetch(`https://drive.google.com/uc?export=download&id=${a.id}`);if(!response.ok)throw Error(`Download failed: ${response.status}`);const data=Buffer.from(await response.arrayBuffer());if(a.image&&!data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))throw Error('Expected PNG, received another format');if(data.length>3_000_000)throw Error('Unexpected file size');await writeFile(a.image?`public/assets/${a.name}`:`docs/${a.name}`,data);console.log(JSON.stringify({file:a.name,bytes:data.length,...(!a.image?{text:data.toString('utf8')}:{})}))}

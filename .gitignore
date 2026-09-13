@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*-debug.log
+firebase-debug.log
+.firebase/
+.sites-runtime/
+prototype/
+private/
+coverage/
+*.csv
+*.tsv
+*.xlsx
+!tests/fixtures/*.csv
