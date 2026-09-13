@@ -59,6 +59,23 @@ Firebase Spark(무료) 플랜은 유료 Cloud Functions/스케줄러를 지원�
 **D-16. 업무 배정은 "해당 직업의 활성 배정을 가진 학생"만 대상으로 서버에서 강제한다.**
 `tasks` 컬렉션의 `create`/`restart` 규칙은 `jobAssignments/{jobId~studentId}`가 `status=='active'`인지 `get()`으로 교차 확인한다. 학생이 이미 그만둔 직업으로 새 업무를 배정받거나, 애초에 맡은 적 없는 직업의 업무를 받는 경로를 rules 단계에서 차단한다.
 
+## 금융(계좌·월급) 1차 구현
+
+**D-17. 첫 금융 거래 종류로 SALARY만 구현하고, journal을 SALARY 전용 형태로 좁힌다.**
+원문·`IMPLEMENTATION_PLAN.md` §5의 정식 `journals` 설계는 `sourceType`/`sourceId`/`policyVersionId`를 갖는 다형적(polymorphic) 구조로 모든 거래 종류(SALARY/DEPOSIT/PURCHASE/INTEREST 등)를 하나의 문서 모양으로 표현한다. 1차 구현에서는 아직 그 다형적 구조를 검증할 다른 거래(구매, 저축, 대출 등)가 하나도 없는 상태에서 일반화된 규칙을 먼저 짜는 것은 추측성 설계다("don't design for hypothetical future requirements"). 대신 `journals` 문서에 `jobId`/`studentId`/`period` 같은 SALARY 고유 필드를 직접 두고 `type=='SALARY'`만 허용했다. 저축/대출/구매 등 다음 거래 종류를 추가할 때 실제 필요에 맞춰 다형적 형태로 넓힌다.
+
+**D-18. `lastJournalId` + `getAfter`로 "원장 없이는 잔액도 없다"를 규칙 레벨에서 강제한다.**
+계좌 문서에 `lastJournalId`(직전 반영 journal의 ID)를 두고, 계좌의 모든 생성·수정 규칙은 `getAfter(journals/{lastJournalId})`로 같은 트랜잭션에서 만들어진 journal을 되짚어 그 journal의 차변/대변 계좌·금액이 지금 이 잔액 변화와 정확히 일치하는지 검증한다. 즉 "이 트랜잭션이 유효한 journal을 만들었다"는 사실 없이는 어떤 계좌 update/create도 통과할 수 없다. 이 덕분에 별도의 `operationKeys` 컬렉션 없이도 **journal 문서 ID 자체(`salary~{jobId}~{studentId}~{period}`)가 멱등성 키**가 된다 — 같은 키로 재시도하면 이미 존재하는 journal에 대한 "update"로 취급되고, journal은 `allow update, delete: if false`라 무조건 거부된다. 재시도는 안전하게 아무 효과도 내지 않는다.
+
+**D-19. 시스템 발행 계좌(`system-issuer`)를 두어 복식 원장을 실제로 복식으로 유지한다.**
+월급은 "누군가의 계좌에서 빠져나가는" 돈이 아니라 학교가 새로 발행하는 돈이므로, 상대편이 필요하다. 학교마다 정확히 하나 존재하는 `system-issuer` 계좌(음수 허용)가 차변이 되고 학생 계좌가 대변이 된다. 전체 시스템의 계좌 잔액 총합은 항상 0이 되어(발행액의 음수 + 학생들의 양수 합) 원장이 실제로 대사(reconcile)된다.
+
+**D-20. `accounts/{accountId}` 문서의 읽기 권한은 `resource.data`가 아니라 경로 변수로 판정한다.**
+처음에는 `resource.data.ownerType=='student' && ownStudent(sid,resource.data.ownerId)`로 짰으나, Firestore 규칙에서 **존재하지 않는 문서**를 `get`할 때 `resource`가 없어 `resource.data` 접근 자체가 평가 오류(=거부)로 이어진다는 사실을 에뮬레이터 테스트로 직접 확인했다. 즉 한 번도 월급을 받은 적 없는 학생은 자기 계좌를 조회하려 할 때마다 권한 오류를 받게 된다. 계좌 ID를 학생 ID와 같게 만들어 두었으므로(`accountId==ownerId`), 대신 `ownStudent(sid,accountId)`처럼 **경로 변수**로 판정하도록 고쳤다 — 문서가 있든 없든 항상 평가 가능하다. 앞으로 계좌 이외의 "본인 소유 문서, ID=studentId" 패턴에도 이 교훈을 적용한다.
+
+**D-21. 학생 대면 은행 화면은 계좌 조회만 제공하고, 저축·대출·구매·이자·세금·과태료는 전부 다음 단계다.**
+지도의 "은행" 건물이 처음으로 실제 데이터에 연결됐지만, 지금은 "내 잔액 + 최근 거래" 열람과 (교사 쪽) 월급 정산만 동작한다. `financialRequests`(학생 요청)/`financeReviews`(은행원 학생 검증) 워크플로는 아직 없다 — 지금은 요청·검토 단계 없이 교사가 직접 정산을 실행한다. 학생이 무언가를 "신청"하는 최초의 금융 상호작용(저축 가입, 대출 신청)이 생기는 시점에 그 워크플로를 도입한다.
+
 ## 문서화 방식
 
 **D-13. `docs/IMPLEMENTATION_PLAN.md`는 유지하고 새로 쓰지 않는다.**

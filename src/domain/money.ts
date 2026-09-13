@@ -1,4 +1,9 @@
-// Pure educational calculations. Production ledger writes stay denied until phase 4.
+// Pure educational calculations. Money is stored as an integer "minor unit" to avoid float drift.
+export const CURRENCY_MINOR_SCALE=100;
+export function toMinor(major:number){if(!Number.isFinite(major)||major<0)throw new Error('금액을 확인해 주세요.');return Math.round(major*CURRENCY_MINOR_SCALE)}
+export function toMajor(minor:number){return minor/CURRENCY_MINOR_SCALE}
+export function formatMoney(minor:number,symbol='마동'){return `${toMajor(minor).toLocaleString()}${symbol}`}
+export function currentPeriod(){const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`}
 export function assertMoney(n:number){if(!Number.isSafeInteger(n)||n<0||n>1_000_000_000)throw new Error('금액 범위를 확인해 주세요.');return n}
 export function simpleInterest(principalMinor:number,monthlyRateBps:number,months:number):number{
   assertMoney(principalMinor);

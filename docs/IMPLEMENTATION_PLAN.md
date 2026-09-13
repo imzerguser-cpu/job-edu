@@ -272,3 +272,9 @@ Spark에서 유료 Functions를 사용하지 않으므로 처음에는 **학생 
 현재 `src/app/App.tsx`, `src/ui/theme.css`로 구현된 1~2단계 화면은 기능적으로는 견고하지만(로그인/학교선택/명단가져오기/직업신청·배정이 규칙 테스트까지 통과) 시각적으로는 지도형 프로토타입과 무관한 일반 관리자 패널 톤이다. 이 도메인/데이터 레이어(`domain/`, `data/`)는 그대로 재사용하고, **학생 대면 화면만** 지도(`CitizenMap`) + 건물별 라우트 + 역할 조건부 렌더 구조로 다시 감싼다. 교사 화면(`SchoolWorkspace`)은 지금의 패널형 톤을 유지한다.
 
 세부 대응표는 `docs/PROTOTYPE_MAPPING.md`, 컴포넌트 트리는 `docs/ARCHITECTURE.md` §3, 결정 배경은 `docs/DECISIONS.md` D-1/D-2를 참조한다.
+
+## 15. 금융(계좌·월급) 1차 구현 범위 (신규)
+
+2026-09-13: §6의 금융 무결성 설계를 실제로 구현했다. 범위는 **월급 정산 한 가지 거래 종류**로 좁혔다: `accounts`(학생 계좌 + 학교 발행 계좌 `system-issuer`), `journals`(SALARY 전용, 불변, ID 자체가 멱등키), 계좌별 `entries` 서브컬렉션(학생 자기 명세). 교사가 정산 월을 고르면 미리보기(직업별 월급 × 해당 직업의 활성 배정 학생) → 확정 순서로 진행하며, Cloud Functions 없이 교사 세션에서 트랜잭션으로 처리한다(§28-29 원칙 그대로).
+
+저축·대출·세금·과태료·구매·`financialRequests`/`financeReviews`(학생 요청·은행원 검증) 워크플로는 아직 없다. 다형적 journal 스키마(sourceType/sourceId/policyVersionId, 여러 거래 종류를 한 형태로)와 별도의 `operationKeys` 컬렉션도 아직 도입하지 않았다 — 지금은 SALARY 하나뿐이라 필요가 없고, 다음 거래 종류가 추가될 때 실제 필요에 맞춰 일반화한다. 자세한 근거는 `docs/DECISIONS.md` D-17~D-21.
