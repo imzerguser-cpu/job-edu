@@ -1,15 +1,19 @@
-import {collection,doc,getDocsFromServer,limit,query,where,runTransaction,serverTimestamp} from 'firebase/firestore';
+import {collection,deleteDoc,doc,getDocFromServer,getDocsFromServer,limit,query,where,runTransaction,serverTimestamp,Timestamp} from 'firebase/firestore';
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant,pairId} from '../domain/jobs';
 import {canRestart,canSubmit,validateSubmission,validateTemplate,type Task,type TaskData,type TaskTemplate} from '../domain/tasks';
+import {EVIDENCE_EXPIRY_HOURS,validateEvidence,type Evidence} from '../domain/evidence';
 export interface TaskStore {
   load():Promise<TaskData>;
   saveTemplate(t:TaskTemplate):Promise<void>;
   assign(templateId:string,studentId:string):Promise<void>;
   submit(taskId:string,text:string):Promise<void>;
+  submitPhoto(taskId:string,mimeType:'image/jpeg',base64:string,caption:string):Promise<void>;
+  getEvidence(taskId:string):Promise<Evidence|null>;
   review(task:Task,approve:boolean,note:string):Promise<void>;
   restart(task:Task):Promise<void>;
+  purgeExpiredEvidence():Promise<number>;
 }
 export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -60,6 +64,29 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
         tx.update(target,{status:'submitted',attempt:old.data().attempt+1,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
       });
     },
+    async submitPhoto(taskId,mimeType,base64,caption){
+      const studentId=assertApplicant(context);
+      const trimmed=validateSubmission(caption);
+      validateEvidence(mimeType,base64);
+      const expiresAt=Timestamp.fromMillis(Date.now()+EVIDENCE_EXPIRY_HOURS*3600*1000);
+      await runTransaction(db,async tx=>{
+        const target=ref('tasks',taskId),old=await tx.get(target);
+        if(!old.exists()||old.data().assigneeStudentId!==studentId)throw new Error('내 업무만 제출할 수 있습니다.');
+        if(old.data().verificationKind!=='photo')throw new Error('사진 인증 업무가 아닙니다.');
+        if(!canSubmit(old.data() as Task))throw new Error('지금 제출할 수 있는 상태가 아닙니다.');
+        tx.set(ref('evidence',taskId),{schoolId:context.schoolId,studentId,taskId,mimeType,payloadBase64:base64,expiresAt,createdAt:serverTimestamp()});
+        tx.update(target,{status:'submitted',attempt:old.data().attempt+1,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
+      });
+    },
+    async getEvidence(taskId){
+      // A missing, expired, or already-reviewed (deleted) photo all deny the read the same way
+      // rules-side (see D-20/evidence get rule) since ownership can't be checked from the path
+      // alone here; treat any read failure the same as "no photo to show".
+      try{
+        const snap=await getDocFromServer(ref('evidence',taskId));
+        return snap.exists()?({...snap.data(),id:snap.id} as Evidence):null;
+      }catch{return null}
+    },
     async review(task,approve,note){
       teacher();note=note.trim();
       if(!approve&&!note)throw new Error('다시 제출을 요청하려면 이유를 적어 주세요.');
@@ -67,6 +94,7 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
       await runTransaction(db,async tx=>{
         const target=ref('tasks',task.id),old=await tx.get(target);
         if(!old.exists()||old.data().status!=='submitted')throw new Error('이미 처리되었거나 제출되지 않은 업무입니다.');
+        if(old.data().verificationKind==='photo')tx.delete(ref('evidence',task.id));
         tx.update(target,{status:approve?'approved':'revision_requested',reviewNote:note,reviewerUid:context.uid,updatedAt:serverTimestamp()});
       });
     },
@@ -81,6 +109,12 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
         if(!assignment.exists()||assignment.data().status!=='active')throw new Error('직업을 유지하고 있는 학생만 다시 시작할 수 있습니다.');
         tx.update(target,{status:'assigned',submissionText:'',reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
       });
+    },
+    async purgeExpiredEvidence(){
+      teacher();
+      const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'evidence')),where('expiresAt','<',Timestamp.now()),limit(20)));
+      await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
+      return snap.docs.length;
     },
   };
 }

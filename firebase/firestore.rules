@@ -230,6 +230,37 @@ service cloud.firestore {
           );
         allow delete: if false;
       }
+      function taskPath(id) { return /databases/$(database)/documents/schools/$(sid)/tasks/$(id); }
+      function evidenceShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','studentId','taskId','mimeType','payloadBase64','expiresAt','createdAt'])
+          && d.keys().hasOnly(['schoolId','studentId','taskId','mimeType','payloadBase64','expiresAt','createdAt'])
+          && d.schoolId==sid
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.taskId.matches('^[A-Za-z0-9_~-]{1,100}$')
+          && d.mimeType=='image/jpeg'
+          && d.payloadBase64 is string && d.payloadBase64.size()>0 && d.payloadBase64.size()<=90000
+          && d.expiresAt is timestamp && d.expiresAt>request.time
+          && d.createdAt==request.time;
+      }
+      // One temporary photo per task (doc id == taskId): a fresh submission always creates it
+      // (the previous one is deleted at review time, approved or rejected — see taskRepository
+      // .review()), never updates it. Reads past expiresAt are blocked by rules immediately;
+      // physical deletion of expired-but-unreviewed evidence happens lazily on a teacher's next
+      // visit (purgeExpiredEvidence) since Spark has no scheduled Functions/TTL.
+      match /evidence/{evidenceId} {
+        // resource != null guarded first: unlike accounts (D-20), evidence ownership can't be
+        // encoded in the path alone, so a deleted/never-existing doc must fail as a clean
+        // denial here rather than erroring on a null resource.
+        allow get: if resource!=null && request.time<resource.data.expiresAt && (teacher(sid) || ownStudent(sid,resource.data.studentId));
+        allow list: if teacher(sid) && bounded();
+        allow create: if ownStudent(sid,request.resource.data.studentId) && evidenceId==request.resource.data.taskId
+          && evidenceShape()
+          && get(taskPath(evidenceId)).data.assigneeStudentId==request.resource.data.studentId
+          && get(taskPath(evidenceId)).data.verificationKind=='photo'
+          && get(taskPath(evidenceId)).data.status in ['assigned','revision_requested'];
+        allow update: if false;
+        allow delete: if teacher(sid) || ownStudent(sid,resource.data.studentId);
+      }
       function journalPath(id) { return /databases/$(database)/documents/schools/$(sid)/journals/$(id); }
       function accountPath(id) { return /databases/$(database)/documents/schools/$(sid)/accounts/$(id); }
       function accountShape() {
