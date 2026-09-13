@@ -64,6 +64,9 @@ service cloud.firestore {
         allow update, delete: if false;
       }
       function bounded() { return request.query.limit != null && request.query.limit <= 100; }
+      // Vote tallying must read every vote, not a page of them, so it gets its own higher cap
+      // rather than raising the general list ceiling everywhere else.
+      function boundedVotes() { return request.query.limit != null && request.query.limit <= 500; }
       function pairOwner(id) {
         return active(sid) && get(memberPath(sid)).data.role == 'student'
           && id.matches('^[A-Za-z0-9_-]+~' + get(memberPath(sid)).data.studentId + '$');
@@ -228,6 +231,7 @@ service cloud.firestore {
         allow delete: if false;
       }
       function journalPath(id) { return /databases/$(database)/documents/schools/$(sid)/journals/$(id); }
+      function accountPath(id) { return /databases/$(database)/documents/schools/$(sid)/accounts/$(id); }
       function accountShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','ownerType','ownerId','balanceMinor','version','lastJournalId','status','schemaVersion','createdAt','updatedAt'])
@@ -426,6 +430,113 @@ service cloud.firestore {
             && get(productPath(request.resource.data.productId)).data.priceMinor==request.resource.data.amountMinor
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.buyerStudentId)).data.balanceMinor>=request.resource.data.amountMinor);
         allow update, delete: if false;
+      }
+      function jobFieldsShape(f) {
+        return f.keys().hasAll(['title','purpose','tasks','beneficiary','suggestedSalaryMinor','tools','reason'])
+          && f.keys().hasOnly(['title','purpose','tasks','beneficiary','suggestedSalaryMinor','tools','reason'])
+          && f.title is string && f.title.size()>0 && f.title.size()<=60
+          && f.purpose is string && f.purpose.size()>0 && f.purpose.size()<=1000
+          && f.tasks is string && f.tasks.size()>0 && f.tasks.size()<=1000
+          && f.beneficiary is string && f.beneficiary.size()<=500
+          && f.suggestedSalaryMinor is int && f.suggestedSalaryMinor>=0 && f.suggestedSalaryMinor<=1000000
+          && f.tools is string && f.tools.size()<=500
+          && f.reason is string && f.reason.size()>0 && f.reason.size()<=1000;
+      }
+      function businessFieldsShape(f) {
+        return f.keys().hasAll(['name','product','customers','price','capital','staffNeeded','expectedRevenue','expectedCost','advantages','risks'])
+          && f.keys().hasOnly(['name','product','customers','price','capital','staffNeeded','expectedRevenue','expectedCost','advantages','risks'])
+          && f.name is string && f.name.size()>0 && f.name.size()<=60
+          && f.product is string && f.product.size()>0 && f.product.size()<=500
+          && f.customers is string && f.customers.size()<=500
+          && f.price is string && f.price.size()<=200
+          && f.capital is string && f.capital.size()<=200
+          && f.staffNeeded is string && f.staffNeeded.size()<=200
+          && f.expectedRevenue is string && f.expectedRevenue.size()<=500
+          && f.expectedCost is string && f.expectedCost.size()<=500
+          && f.advantages is string && f.advantages.size()<=1000
+          && f.risks is string && f.risks.size()<=1000;
+      }
+      function proposalFieldsShape(type,fields) {
+        return (type=='job' && jobFieldsShape(fields)) || (type=='business' && businessFieldsShape(fields));
+      }
+      function proposalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','authorStudentId','fields','status','deadlineAt','minParticipation','approvalThreshold','tallyYes','tallyNo','tallyTotal','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','type','authorStudentId','fields','status','deadlineAt','minParticipation','approvalThreshold','tallyYes','tallyNo','tallyTotal','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.type in ['job','business']
+          && d.authorStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && proposalFieldsShape(d.type,d.fields)
+          && d.status in ['submitted','voting','closed','approved','rejected']
+          && d.minParticipation is int && d.minParticipation>=0 && d.minParticipation<=100
+          && d.approvalThreshold is int && d.approvalThreshold>=0 && d.approvalThreshold<=100
+          && d.tallyYes is int && d.tallyYes>=0 && d.tallyNo is int && d.tallyNo>=0 && d.tallyTotal is int && d.tallyTotal>=0
+          && (d.deadlineAt==null || d.deadlineAt is timestamp)
+          && d.decisionNote is string && d.decisionNote.size()<=500
+          && (d.reviewerUid==null || d.reviewerUid is string)
+          && (d.createdEntityId==null || d.createdEntityId is string)
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      function proposalUnchangedCore() {
+        return request.resource.data.type==resource.data.type
+          && request.resource.data.authorStudentId==resource.data.authorStudentId
+          && request.resource.data.fields==resource.data.fields
+          && request.resource.data.createdAt==resource.data.createdAt;
+      }
+      // Students submit job/business proposals with structured fields (never one free-text
+      // box — see D-27). Voting policy is teacher-set only when opening the vote, not at
+      // submission. A closed proposal's tally is teacher-computed from the votes subcollection
+      // (Rules cannot aggregate a subcollection) and trusted the same way other teacher-entered
+      // figures are; the vote documents themselves stay tamper-evident and one-per-account.
+      match /proposals/{proposalId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if ownStudent(sid,request.resource.data.authorStudentId) && proposalShape()
+          && request.resource.data.status=='submitted'
+          && request.resource.data.deadlineAt==null
+          && request.resource.data.minParticipation==0 && request.resource.data.approvalThreshold==50
+          && request.resource.data.tallyYes==0 && request.resource.data.tallyNo==0 && request.resource.data.tallyTotal==0
+          && request.resource.data.decisionNote=='' && request.resource.data.reviewerUid==null && request.resource.data.createdEntityId==null
+          && request.resource.data.createdAt==request.time;
+        allow update: if proposalShape() && proposalUnchangedCore()
+          && (
+            (teacher(sid) && resource.data.status=='submitted' && request.resource.data.status=='voting'
+              && request.resource.data.deadlineAt is timestamp && request.resource.data.deadlineAt>request.time
+              && request.resource.data.tallyYes==0 && request.resource.data.tallyNo==0 && request.resource.data.tallyTotal==0
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','deadlineAt','minParticipation','approvalThreshold','updatedAt']))
+            ||
+            (teacher(sid) && resource.data.status=='voting' && request.resource.data.status=='closed'
+              && request.time>=resource.data.deadlineAt
+              && request.resource.data.tallyTotal==request.resource.data.tallyYes+request.resource.data.tallyNo
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','tallyYes','tallyNo','tallyTotal','updatedAt']))
+            ||
+            (teacher(sid) && resource.data.status=='closed' && request.resource.data.status in ['approved','rejected']
+              && request.resource.data.reviewerUid==request.auth.uid
+              && (request.resource.data.status=='approved' || request.resource.data.decisionNote.size()>0)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','decisionNote','reviewerUid','createdEntityId','updatedAt'])
+              && (
+                (request.resource.data.status=='rejected' && request.resource.data.createdEntityId==null)
+                ||
+                (request.resource.data.status=='approved' && request.resource.data.createdEntityId==('proposal-'+proposalId)
+                  && (
+                    (resource.data.type=='job' && getAfter(jobPath('proposal-'+proposalId)).data.schoolId==sid)
+                    ||
+                    (resource.data.type=='business' && getAfter(businessPath('proposal-'+proposalId)).data.schoolId==sid
+                      && getAfter(accountPath('proposal-'+proposalId)).data.ownerType=='business')
+                  ))
+              ))
+          );
+        allow delete: if false;
+        match /votes/{uid} {
+          allow get: if teacher(sid) || request.auth.uid==uid;
+          allow list: if teacher(sid) && boundedVotes();
+          allow create: if activeStudent(sid) && request.auth.uid==uid
+            && request.resource.data.keys().hasAll(['choice','createdAt']) && request.resource.data.keys().hasOnly(['choice','createdAt'])
+            && request.resource.data.choice in ['yes','no'] && request.resource.data.createdAt==request.time
+            && get(/databases/$(database)/documents/schools/$(sid)/proposals/$(proposalId)).data.status=='voting'
+            && request.time<get(/databases/$(database)/documents/schools/$(sid)/proposals/$(proposalId)).data.deadlineAt;
+          allow update, delete: if false;
+        }
       }
       // Each future feature receives explicit rules and emulator tests before activation.
       match /{document=**} { allow read, write: if false; }

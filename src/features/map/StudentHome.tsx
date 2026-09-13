@@ -5,16 +5,18 @@ import type {CareerStore} from '../../data/careerRepository';
 import type {TaskStore} from '../../data/taskRepository';
 import type {FinanceStore} from '../../data/financeRepository';
 import type {BusinessStore} from '../../data/businessRepository';
+import type {ProposalStore} from '../../data/proposalRepository';
 import {CareerWorkspace} from '../jobs/CareerWorkspace';
 import {TaskWorkspace} from '../tasks/TaskWorkspace';
 import {BankWorkspace} from '../finance/BankWorkspace';
 import {StoreWorkspace} from '../business/StoreWorkspace';
+import {CivicWorkspace} from '../civic/CivicWorkspace';
 import {CitizenMap} from './CitizenMap';
 import {BuildingShell} from './BuildingShell';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {buildings,type BuildingId} from './buildings';
 
-export function StudentHome({citizen,school,context,store,taskStore,financeStore,businessStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;businessStore:BusinessStore}){
+export function StudentHome({citizen,school,context,store,taskStore,financeStore,businessStore,proposalStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;businessStore:BusinessStore;proposalStore:ProposalStore}){
   const [view,setView]=useState<'map'|BuildingId>('map');
   const [jobCount,setJobCount]=useState<number|null>(null);
   useEffect(()=>{
@@ -33,7 +35,8 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   return <BuildingShell title={building.label} subtitle={building.subtitle} eyebrow={dept?.name} onBack={()=>setView('map')}>
     {view==='mypage'
       ?<><CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
-        <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/></>
+        <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
+        <CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/></>
       :view==='bank'
       ?<BankWorkspace store={financeStore} teacher={false} currencySymbol={school.currencyName}/>
       :view==='store'
