@@ -146,6 +146,84 @@ service cloud.firestore {
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endAt','updatedAt'])));
         allow delete: if false;
       }
+      function taskTemplatePath(id) { return /databases/$(database)/documents/schools/$(sid)/taskTemplates/$(id); }
+      function templateShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','jobId','title','instructions','verificationKind','status','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','jobId','title','instructions','verificationKind','status','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.jobId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.title is string && d.title.size()>0 && d.title.size()<=60
+          && d.instructions is string && d.instructions.size()>0 && d.instructions.size()<=1000
+          && d.verificationKind in ['artifact','photo','system']
+          && d.status in ['active','archived']
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      match /taskTemplates/{templateId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if teacher(sid) && templateId.matches('^[A-Za-z0-9_-]{1,100}$') && templateShape()
+          && request.resource.data.createdAt==request.time && exists(jobPath(request.resource.data.jobId));
+        allow update: if teacher(sid) && templateShape()
+          && request.resource.data.jobId==resource.data.jobId && request.resource.data.createdAt==resource.data.createdAt;
+        allow delete: if false;
+      }
+      function taskShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','templateId','jobId','assigneeStudentId','verificationKind','status','attempt','submissionText','reviewNote','reviewerUid','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','templateId','jobId','assigneeStudentId','verificationKind','status','attempt','submissionText','reviewNote','reviewerUid','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.templateId.matches('^[A-Za-z0-9_-]{1,100}$') && d.jobId.matches('^[A-Za-z0-9_-]{1,100}$') && d.assigneeStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.verificationKind in ['artifact','photo','system']
+          && d.status in ['assigned','submitted','approved','revision_requested']
+          && d.attempt is int && d.attempt>=0
+          && d.submissionText is string && d.submissionText.size()<=2000
+          && d.reviewNote is string && d.reviewNote.size()<=500
+          && (d.reviewerUid==null || d.reviewerUid is string)
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      match /tasks/{taskId} {
+        allow get: if teacher(sid) || ownStudent(sid,resource.data.assigneeStudentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.assigneeStudentId));
+        allow create: if teacher(sid) && taskId==request.resource.data.templateId+'~'+request.resource.data.assigneeStudentId
+          && taskShape()
+          && request.resource.data.status=='assigned' && request.resource.data.attempt==0
+          && request.resource.data.submissionText=='' && request.resource.data.reviewNote=='' && request.resource.data.reviewerUid==null
+          && request.resource.data.createdAt==request.time
+          && get(taskTemplatePath(request.resource.data.templateId)).data.status=='active'
+          && get(taskTemplatePath(request.resource.data.templateId)).data.jobId==request.resource.data.jobId
+          && get(assignmentPath(request.resource.data.jobId+'~'+request.resource.data.assigneeStudentId)).data.status=='active';
+        allow update: if taskShape()
+          && request.resource.data.templateId==resource.data.templateId
+          && request.resource.data.jobId==resource.data.jobId
+          && request.resource.data.assigneeStudentId==resource.data.assigneeStudentId
+          && request.resource.data.verificationKind==resource.data.verificationKind
+          && (
+            (ownStudent(sid,resource.data.assigneeStudentId)
+              && resource.data.status in ['assigned','revision_requested']
+              && request.resource.data.status=='submitted'
+              && request.resource.data.attempt==resource.data.attempt+1
+              && request.resource.data.submissionText.size()>0
+              && request.resource.data.reviewNote=='' && request.resource.data.reviewerUid==null)
+            ||
+            (teacher(sid)
+              && resource.data.status=='submitted'
+              && request.resource.data.status in ['approved','revision_requested']
+              && request.resource.data.attempt==resource.data.attempt
+              && request.resource.data.submissionText==resource.data.submissionText
+              && request.resource.data.reviewerUid==request.auth.uid
+              && (request.resource.data.status=='approved' || request.resource.data.reviewNote.size()>0))
+            ||
+            (teacher(sid)
+              && resource.data.status=='approved'
+              && request.resource.data.status=='assigned'
+              && request.resource.data.attempt==resource.data.attempt
+              && request.resource.data.submissionText=='' && request.resource.data.reviewNote=='' && request.resource.data.reviewerUid==null
+              && get(taskTemplatePath(resource.data.templateId)).data.status=='active'
+              && get(assignmentPath(resource.data.jobId+'~'+resource.data.assigneeStudentId)).data.status=='active')
+          );
+        allow delete: if false;
+      }
       // Each future feature receives explicit rules and emulator tests before activation.
       // No teacher wildcard: even teachers cannot edit an existing journal or balance here.
       match /{document=**} { allow read, write: if false; }

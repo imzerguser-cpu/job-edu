@@ -26,6 +26,8 @@
 .citizen-placeholder{background:var(--citizen-blue2);border:1px dashed #b9d7f2;border-radius:18px;padding:22px;color:#3c5876}
 .citizen-placeholder p{margin:0 0 8px;line-height:1.6}
 .citizen-placeholder .muted{color:#6b81a0;font-size:.9rem}
+.citizen-building .task-row{background:var(--citizen-green2);border:1px solid #cdeed6;border-radius:16px}
+.citizen-building .badge{background:#fff3d7;color:#8b6217}
 @media(max-width:640px){
   .citizen-hud{padding:10px 12px;gap:10px}
   .citizen-hud-stat{width:100%;align-items:flex-start;margin-left:0}

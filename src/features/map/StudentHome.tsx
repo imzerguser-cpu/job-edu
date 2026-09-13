@@ -2,13 +2,15 @@ import {useEffect,useState} from 'react';
 import {departments} from '../../domain/jobs';
 import type {School,SchoolContext,Student} from '../../domain/model';
 import type {CareerStore} from '../../data/careerRepository';
+import type {TaskStore} from '../../data/taskRepository';
 import {CareerWorkspace} from '../jobs/CareerWorkspace';
+import {TaskWorkspace} from '../tasks/TaskWorkspace';
 import {CitizenMap} from './CitizenMap';
 import {BuildingShell} from './BuildingShell';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {buildings,type BuildingId} from './buildings';
 
-export function StudentHome({citizen,school,context,store}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore}){
+export function StudentHome({citizen,school,context,store,taskStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore}){
   const [view,setView]=useState<'map'|BuildingId>('map');
   const [jobCount,setJobCount]=useState<number|null>(null);
   useEffect(()=>{
@@ -26,7 +28,8 @@ export function StudentHome({citizen,school,context,store}:{citizen:Student;scho
   const dept=building.departmentId?departments.find(d=>d.id===building.departmentId):null;
   return <BuildingShell title={building.label} subtitle={building.subtitle} eyebrow={dept?.name} onBack={()=>setView('map')}>
     {view==='mypage'
-      ?<CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
+      ?<><CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
+        <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/></>
       :<BuildingPlaceholder label={building.label}/>}
   </BuildingShell>;
 }
