@@ -102,6 +102,7 @@ export function firestoreProposals(db:Firestore,context:SchoolContext):ProposalS
           tx.set(ref('accounts',entityId!),{schoolId:context.schoolId,ownerType:'business',ownerId:entityId,balanceMinor:0,version:0,lastJournalId:null,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
         }
         tx.update(target,{status:approve?'approved':'rejected',decisionNote:note,reviewerUid:context.uid,createdEntityId:entityId,updatedAt:serverTimestamp()});
+        tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'proposal_decide',targetType:'proposal',targetId:proposal.id,detail:`${approve?'approved':'rejected'}: ${note}`.slice(0,500),createdAt:serverTimestamp()});
       });
     },
   };

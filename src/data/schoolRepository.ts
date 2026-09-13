@@ -1,4 +1,4 @@
-import {collection,doc,getDocFromServer,getDocsFromServer,query,limit,orderBy,runTransaction,serverTimestamp} from 'firebase/firestore';
+import {collection,doc,getDocFromServer,getDocsFromServer,query,limit,orderBy,runTransaction,serverTimestamp,updateDoc} from 'firebase/firestore';
 import type {Firestore,QueryDocumentSnapshot,DocumentData} from 'firebase/firestore';
 import {isTeacher,schoolPath,validateId,type Membership,type School,type SchoolContext,type Student} from '../domain/model';
 import type {RosterRow} from '../domain/roster';
@@ -25,6 +25,17 @@ export async function listStudents(db:Firestore,context:SchoolContext){
   if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
   const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'students')),orderBy('name'),limit(100)));
   return snap.docs.map(d=>({...d.data(),id:d.id} as Student));
+}
+// Enrollment lifecycle only (grade/class/status) — never touches citizenCode, financial data,
+// or login access (membership provisioning stays outside the app, see D-5).
+export async function updateStudent(db:Firestore,context:SchoolContext,student:Student){
+  if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
+  if(!Number.isInteger(student.grade)||student.grade<1||student.grade>6)throw new Error('학년을 확인해 주세요.');
+  if(student.className&&student.className.length>20)throw new Error('반 이름은 20자 이하로 입력해 주세요.');
+  if(!(['active','graduated','transferred'] as const).includes(student.status))throw new Error('상태를 확인해 주세요.');
+  await updateDoc(doc(db,schoolPath(context,'students',student.id)),{
+    name:student.name,grade:student.grade,className:student.className,schoolYear:student.schoolYear,status:student.status,updatedAt:serverTimestamp(),
+  });
 }
 export interface PlannedStudent extends RosterRow {id:string;citizenCode:string}
 export function planImport(rows:RosterRow[]):PlannedStudent[]{return rows.map(r=>{const id=crypto.randomUUID();return {...r,id,citizenCode:`C-${id}`}})}

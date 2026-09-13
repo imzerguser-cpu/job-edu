@@ -569,6 +569,26 @@ service cloud.firestore {
           allow update, delete: if false;
         }
       }
+      function auditLogShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','actorUid','action','targetType','targetId','detail','createdAt'])
+          && d.keys().hasOnly(['schoolId','actorUid','action','targetType','targetId','detail','createdAt'])
+          && d.schoolId==sid && d.actorUid==request.auth.uid
+          && d.action is string && d.action.size()>0 && d.action.size()<=60
+          && d.targetType is string && d.targetType.size()<=60
+          && d.targetId is string && d.targetId.size()<=200
+          && d.detail is string && d.detail.size()<=500
+          && d.createdAt==request.time;
+      }
+      // Append-only trail of sensitive teacher actions (§62): who, when, what, on which target.
+      // Never readable by students, never editable by anyone — a correction is a new proposal
+      // decision or a new journal, not a rewritten log line.
+      match /auditLogs/{logId} {
+        allow get: if teacher(sid);
+        allow list: if teacher(sid) && bounded();
+        allow create: if teacher(sid) && auditLogShape();
+        allow update, delete: if false;
+      }
       // Each future feature receives explicit rules and emulator tests before activation.
       match /{document=**} { allow read, write: if false; }
     }

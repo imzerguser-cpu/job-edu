@@ -76,6 +76,7 @@ export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStor
             if(student.exists())tx.update(studentRef,{balanceMinor:studentAfter,version:student.data().version+1,lastJournalId:item.journalId,updatedAt:serverTimestamp()});
             else tx.set(studentRef,{schoolId:context.schoolId,ownerType:'student',ownerId:item.studentId,balanceMinor:studentAfter,version:0,lastJournalId:item.journalId,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
             tx.set(doc(collection(studentRef,'entries'),item.journalId),{schoolId:context.schoolId,journalId:item.journalId,type:'SALARY',deltaMinor:item.amountMinor,balanceAfterMinor:studentAfter,label:'월급',postedAt:serverTimestamp()});
+            tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'salary_payment',targetType:'journal',targetId:item.journalId,detail:`${item.studentName} · ${item.jobName} · ${item.amountMinor}`,createdAt:serverTimestamp()});
           });
           paid++;
         }catch{failed++}

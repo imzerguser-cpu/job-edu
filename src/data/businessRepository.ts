@@ -34,6 +34,7 @@ export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessSt
         const {id,...data}=business;
         tx.set(ref('businesses',id),{...data,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
         tx.set(ref('accounts',id),{schoolId:context.schoolId,ownerType:'business',ownerId:id,balanceMinor:0,version:0,lastJournalId:null,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+        tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'business_create',targetType:'business',targetId:id,detail:data.name,createdAt:serverTimestamp()});
       });
     },
     async saveBusiness(b){
