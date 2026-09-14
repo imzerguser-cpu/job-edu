@@ -5,4 +5,5 @@ export const auditActionNames:Record<string,string>={
   salary_payment:'월급 지급',
   income_tax:'소득세 징수',
   business_tax:'사업 세금 징수',
+  fine_issued:'과태료 부과',
 };

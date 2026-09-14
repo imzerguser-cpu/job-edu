@@ -51,7 +51,10 @@ service cloud.firestore {
       }
       match /students/{studentId} {
         allow get: if teacher(sid) || ownStudent(sid,studentId);
-        allow list: if teacher(sid) && request.query.limit != null && request.query.limit <= 100;
+        // Any active member (not just teacher) may list the roster, bounded — a small classroom
+        // "little society" where citizens already know each other by name; needed so a student
+        // reporting a rule violation (§24) can pick who from the class, not just see themselves.
+        allow list: if active(sid) && request.query.limit != null && request.query.limit <= 100;
         allow create: if teacher(sid) && studentShape(sid)
           && request.resource.data.createdAt == request.time && request.resource.data.status == 'active';
         allow update: if teacher(sid) && studentShape(sid)
@@ -292,7 +295,8 @@ service cloud.firestore {
           || (j.type=='LOAN' && teacher(sid))
           || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
           || (j.type=='INCOME_TAX' && teacher(sid))
-          || (j.type=='BUSINESS_TAX' && teacher(sid));
+          || (j.type=='BUSINESS_TAX' && teacher(sid))
+          || (j.type=='FINE' && teacher(sid));
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -359,7 +363,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -578,6 +582,18 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // Fine (§24) — teacher-session, one journal per report (not per period, since fines are
+      // event-triggered not periodic), tied to the deciding report via reportId.
+      function fineJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','reportId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','reportId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.reportId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.debitAccountId==d.studentId && d.creditAccountId=='community-fund'
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=100000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       // Business tax (§23) — same shape as incomeTaxJournalShape (teacher-session settlement,
       // keyed by period not contractId), just debiting a business account instead of a student's.
       function businessTaxJournalShape() {
@@ -663,12 +679,22 @@ service cloud.firestore {
           (teacher(sid) && businessTaxJournalShape() && request.resource.data.type=='BUSINESS_TAX'
             && journalId==('businessTax~'+request.resource.data.businessId+'~'+request.resource.data.period)
             && get(businessPath(request.resource.data.businessId)).data.status=='active'
-            && get(accountPath(request.resource.data.businessId)).data.balanceMinor>=request.resource.data.amountMinor);
+            && get(accountPath(request.resource.data.businessId)).data.balanceMinor>=request.resource.data.amountMinor)
+          ||
+          // Fine: only as part of deciding the matching violationReports/{reportId} (still
+          // 'submitted' pre-transaction here, since the report's own update to 'fined' happens in
+          // the same transaction) — target student and amount must match the report being decided.
+          (teacher(sid) && fineJournalShape() && request.resource.data.type=='FINE'
+            && journalId==('fine~'+request.resource.data.reportId)
+            && get(violationReportPath(request.resource.data.reportId)).data.status=='submitted'
+            && get(violationReportPath(request.resource.data.reportId)).data.targetStudentId==request.resource.data.studentId
+            && get(accountPath(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor);
         allow update, delete: if false;
       }
       function financialRequestPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialRequests/$(id); }
       function financeReviewPath(id) { return /databases/$(database)/documents/schools/$(sid)/financeReviews/$(id); }
       function loanPath(id) { return /databases/$(database)/documents/schools/$(sid)/loans/$(id); }
+      function violationReportPath(id) { return /databases/$(database)/documents/schools/$(sid)/violationReports/$(id); }
       function financialRequestShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','studentId','operation','productId','principalMinor','months','purpose','repaymentPlan','status','assignedStudentId','reviewNote','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
@@ -823,6 +849,51 @@ service cloud.firestore {
           && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.amountMinor==request.resource.data.totalOwedMinor
           && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.debitAccountId==resource.data.studentId
           && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.creditAccountId=='system-issuer';
+        allow delete: if false;
+      }
+      function violationReportShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','reporterUid','targetStudentId','description','status','fineAmountMinor','decisionNote','journalId','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','reporterUid','targetStudentId','description','status','fineAmountMinor','decisionNote','journalId','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.targetStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.description is string && d.description.size()>0 && d.description.size()<=500
+          && d.status in ['submitted','fined','dismissed']
+          && (d.fineAmountMinor==null || (d.fineAmountMinor is int && d.fineAmountMinor>0 && d.fineAmountMinor<=100000))
+          && d.decisionNote is string && d.decisionNote.size()<=500
+          && (d.journalId==null || d.journalId is string)
+          && d.updatedAt==request.time;
+      }
+      // 과태료 보고(§24): 누구나(교사 포함) 신고할 수 있지만 금융 효과는 전혀 없다 — 교사의
+      // 결정만이 실제 FINE 저널을 만든다(위 journals 규칙). 신고 원문은 신고자 본인과 교사만
+      // 볼 수 있다 — 대상 학생은 자기 계좌의 FINE 내역(entries)으로 결과만 보고, 누가 신고했는지나
+      // 신고 원문은 보지 않는다(또래 신고이므로 개인정보 노출을 최소화).
+      match /violationReports/{reportId} {
+        allow get: if teacher(sid) || (signedIn() && resource.data.reporterUid==request.auth.uid);
+        allow list: if bounded() && (teacher(sid) || (signedIn() && resource.data.reporterUid==request.auth.uid));
+        allow create: if active(sid) && violationReportShape()
+          && request.resource.data.reporterUid==request.auth.uid
+          && request.resource.data.status=='submitted' && request.resource.data.fineAmountMinor==null
+          && request.resource.data.decisionNote=='' && request.resource.data.journalId==null
+          && request.resource.data.createdAt==request.time
+          && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.targetStudentId)).data.status=='active';
+        // Decision: teacher only, submitted -> fined|dismissed, reporter/target/description/report
+        // text never change. Fined ties to a FINE journal created in the same transaction;
+        // dismissed just needs a non-empty reason.
+        allow update: if teacher(sid) && violationReportShape()
+          && request.resource.data.reporterUid==resource.data.reporterUid && request.resource.data.targetStudentId==resource.data.targetStudentId
+          && request.resource.data.description==resource.data.description && request.resource.data.createdAt==resource.data.createdAt
+          && resource.data.status=='submitted'
+          && (
+            (request.resource.data.status=='dismissed' && request.resource.data.fineAmountMinor==null
+              && request.resource.data.journalId==null && request.resource.data.decisionNote.size()>0)
+            ||
+            (request.resource.data.status=='fined' && request.resource.data.fineAmountMinor is int
+              && request.resource.data.journalId==('fine~'+reportId)
+              && getAfter(journalPath(request.resource.data.journalId)).data.type=='FINE'
+              && getAfter(journalPath(request.resource.data.journalId)).data.studentId==resource.data.targetStudentId
+              && getAfter(journalPath(request.resource.data.journalId)).data.amountMinor==request.resource.data.fineAmountMinor)
+          );
         allow delete: if false;
       }
       function jobFieldsShape(f) {

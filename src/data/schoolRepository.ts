@@ -28,6 +28,14 @@ export async function listStudents(db:Firestore,context:SchoolContext){
   const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'students')),orderBy('name'),limit(100)));
   return snap.docs.map(d=>({...d.data(),id:d.id} as Student));
 }
+// Any active member (student or teacher) may see who else is in the class — needed so a student
+// can pick a target when reporting a rule violation (§24). Filters to 'active' client-side rather
+// than with a where() clause, to avoid needing a composite index for equality+orderBy (D-68).
+export async function listActiveStudents(db:Firestore,context:SchoolContext){
+  if(context.membership.status!=='active')throw new Error('학교 이용 권한이 없습니다.');
+  const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'students')),orderBy('name'),limit(100)));
+  return snap.docs.map(d=>({...d.data(),id:d.id} as Student)).filter(s=>s.status==='active');
+}
 // Enrollment lifecycle only (grade/class/status) — never touches citizenCode, financial data,
 // or login access (membership provisioning stays outside the app, see D-5).
 export async function updateStudent(db:Firestore,context:SchoolContext,student:Student){

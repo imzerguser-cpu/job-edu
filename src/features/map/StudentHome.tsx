@@ -1,5 +1,7 @@
 import {useEffect,useState} from 'react';
 import {departments} from '../../domain/jobs';
+import {listActiveStudents} from '../../data/schoolRepository';
+import {firebase} from '../../data/firebase';
 import type {School,SchoolContext,Student} from '../../domain/model';
 import type {CareerStore} from '../../data/careerRepository';
 import type {TaskStore} from '../../data/taskRepository';
@@ -9,24 +11,32 @@ import type {LoanStore} from '../../data/loanRepository';
 import type {FinancialProductStore} from '../../data/financialProductRepository';
 import type {BusinessStore} from '../../data/businessRepository';
 import type {ProposalStore} from '../../data/proposalRepository';
+import type {ViolationStore} from '../../data/violationRepository';
 import {CareerWorkspace} from '../jobs/CareerWorkspace';
 import {TaskWorkspace} from '../tasks/TaskWorkspace';
 import {BankWorkspace} from '../finance/BankWorkspace';
 import {StoreWorkspace} from '../business/StoreWorkspace';
 import {CivicWorkspace} from '../civic/CivicWorkspace';
+import {ViolationWorkspace} from '../civic/ViolationWorkspace';
 import {CitizenMap} from './CitizenMap';
 import {BuildingShell} from './BuildingShell';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {buildings,type BuildingId} from './buildings';
 
-export function StudentHome({citizen,school,context,store,taskStore,financeStore,savingsStore,loanStore,productStore,businessStore,proposalStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;businessStore:BusinessStore;proposalStore:ProposalStore}){
+export function StudentHome({citizen,school,context,store,taskStore,financeStore,savingsStore,loanStore,productStore,businessStore,proposalStore,violationStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;businessStore:BusinessStore;proposalStore:ProposalStore;violationStore:ViolationStore}){
   const [view,setView]=useState<'map'|BuildingId>('map');
   const [jobCount,setJobCount]=useState<number|null>(null);
+  const [roster,setRoster]=useState<Student[]>([citizen]);
   useEffect(()=>{
     let alive=true;
     store.load().then(d=>{if(alive)setJobCount(d.assignments.filter(a=>a.status==='active'&&a.studentId===citizen.id).length)}).catch(()=>{if(alive)setJobCount(null)});
     return ()=>{alive=false};
   },[store,citizen.id]);
+  useEffect(()=>{
+    let alive=true;
+    if(firebase)listActiveStudents(firebase.db,context).then(list=>{if(alive)setRoster(list)}).catch(()=>{if(alive)setRoster([citizen])});
+    return ()=>{alive=false};
+  },[context,citizen]);
 
   if(view==='map')return <div className="citizen-shell">
     <CitizenHud citizen={citizen} community={school.communityName} jobCount={jobCount}/>
@@ -39,7 +49,8 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
     {view==='mypage'
       ?<><CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
         <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
-        <CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/></>
+        <CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
+        <ViolationWorkspace store={violationStore} teacher={false} students={roster} studentId={citizen.id} currencySymbol={school.currencyName}/></>
       :view==='bank'
       ?<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>
       :view==='store'

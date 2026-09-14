@@ -21,7 +21,11 @@ const db=(uid:string)=>env.authenticatedContext(uid).firestore() as unknown as F
 describe('멀티스쿨·개인정보 권한',()=>{
   it('미로그인 데이터 접근 거부',async()=>{await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(),'schools/a')))});
   it('학생 자기 프로필만 허용',async()=>{await assertSucceeds(getDoc(doc(db('a-one'),'schools/a/students/one')));await assertFails(getDoc(doc(db('a-one'),'schools/a/students/two')))});
-  it('학생 전체 명단 쿼리 거부',async()=>{await assertFails(getDocs(query(collection(db('a-one'),'schools/a/students'),limit(100))))});
+  it('학생도 한도 내 명단 조회는 가능하지만(§24 신고 대상 선택용), 한도 없는 전체 쿼리는 여전히 거부',async()=>{
+    await assertSucceeds(getDocs(query(collection(db('a-one'),'schools/a/students'),limit(100))));
+    await assertFails(getDocs(collection(db('a-one'),'schools/a/students')));
+    await assertFails(getDocs(query(collection(db('a-one'),'schools/a/students'),limit(101))));
+  });
   it('교사 자기 학교만 허용',async()=>{await assertSucceeds(getDocs(query(collection(db('teacher-a'),'schools/a/students'),limit(100))));await assertFails(getDoc(doc(db('teacher-a'),'schools/b/students/one')))});
   it('학생의 다른 학교 접근과 필드 위조 거부',async()=>{await assertFails(getDoc(doc(db('a-one'),'schools/b')));await assertFails(setDoc(doc(db('teacher-a'),'schools/a/students/three'),{...profile('b'),createdAt:serverTimestamp(),updatedAt:serverTimestamp()}))});
   it('학생과 교사의 역할 승격을 모두 거부',async()=>{await assertFails(updateDoc(doc(db('a-one'),'schools/a/members/a-one'),{role:'teacher'}));await assertFails(updateDoc(doc(db('teacher-a'),'schools/a/members/a-one'),{role:'teacher'}));await assertFails(setDoc(doc(db('stranger'),'schools/a/members/stranger'),{schoolId:'a',role:'owner',status:'active'}))});
