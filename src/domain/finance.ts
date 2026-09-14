@@ -1,5 +1,6 @@
 export const ISSUER_ACCOUNT_ID='system-issuer';
-export type JournalType='SALARY'|'PURCHASE'|'SAVINGS_DEPOSIT'|'INTEREST'|'LOAN'|'LOAN_REPAYMENT';
+export const COMMUNITY_FUND_ACCOUNT_ID='community-fund';
+export type JournalType='SALARY'|'PURCHASE'|'SAVINGS_DEPOSIT'|'INTEREST'|'LOAN'|'LOAN_REPAYMENT'|'INCOME_TAX';
 export interface Account {id:string;schoolId:string;ownerType:'student'|'school'|'business';ownerId:string;balanceMinor:number;version:number;lastJournalId:string|null;status:'active';schemaVersion:1}
 export interface SalaryJournal {id:string;schoolId:string;type:'SALARY';jobId:string;studentId:string;period:string;debitAccountId:string;creditAccountId:string;amountMinor:number;postedBy:string;schemaVersion:1}
 export interface AccountEntry {id:string;schoolId:string;journalId:string;type:JournalType;deltaMinor:number;balanceAfterMinor:number;label:string}
@@ -28,4 +29,22 @@ export function validAmount(product:FinancialProduct,amountMinor:number){
 }
 export function validMonths(product:FinancialProduct,months:number){
   return Number.isInteger(months)&&months>=product.minMonths&&months<=product.maxMonths;
+}
+
+// 소득세(§23) — a school-wide flat rate (basis points) the teacher sets, applied only to salary
+// actually paid in a given period (not to standing balance, which would be a wealth tax instead).
+// This reuses SALARY journals already posted for that period as the taxable-income source, so it
+// never needs to re-derive "who should have been paid" — it taxes what was, which also means it
+// naturally requires salary to have been settled first.
+export interface IncomeTaxPreviewItem {studentId:string;studentName:string;incomeMinor:number;amountMinor:number;period:string;journalId:string;alreadyPaid:boolean}
+export function validateIncomeTaxRateBp(rateBp:number){
+  if(!Number.isInteger(rateBp)||rateBp<0||rateBp>2000)throw new Error('세율은 0~20% 사이로 설정해 주세요.');
+}
+export function computeIncomeTax(incomeMinor:number,rateBp:number){
+  return Math.floor(incomeMinor*rateBp/10000);
+}
+export function incomeTaxJournalId(studentId:string,period:string){
+  if(!periodPattern(period))throw new Error('정산 월(YYYY-MM)을 확인해 주세요.');
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(studentId))throw new Error('시민 식별자를 확인해 주세요.');
+  return `tax~${studentId}~${period}`;
 }

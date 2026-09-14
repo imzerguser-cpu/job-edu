@@ -1,19 +1,21 @@
 import {useEffect,useRef,useState} from 'react';
 import {formatMoney,currentPeriod} from '../../domain/money';
-import {validAmount,validMonths,type Account,type AccountEntry,type FinancialProduct,type SalaryPreviewItem} from '../../domain/finance';
+import {validAmount,validMonths,type Account,type AccountEntry,type FinancialProduct,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../../domain/finance';
 import type {SavingsContract,SavingsMaturityPreviewItem} from '../../domain/savings';
 import type {FinanceReviewChecklist,FinancialRequest,LoanContract} from '../../domain/loans';
-import type {Student} from '../../domain/model';
+import type {SchoolContext,Student} from '../../domain/model';
 import type {FinanceStore} from '../../data/financeRepository';
 import type {SavingsStore} from '../../data/savingsRepository';
 import type {LoanStore} from '../../data/loanRepository';
 import type {FinancialProductStore} from '../../data/financialProductRepository';
+import {updateIncomeTaxRate} from '../../data/schoolRepository';
+import {firebase} from '../../data/firebase';
 
-interface BankProps {store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;teacher:boolean;students?:Student[];currencySymbol?:string}
+interface BankProps {store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;teacher:boolean;students?:Student[];currencySymbol?:string;context?:SchoolContext;incomeTaxRateBp?:number}
 
-export function BankWorkspace({store,savingsStore,loanStore,productStore,teacher,students,currencySymbol='마동'}:BankProps){
+export function BankWorkspace({store,savingsStore,loanStore,productStore,teacher,students,currencySymbol='마동',context,incomeTaxRateBp=0}:BankProps){
   if(!teacher)return <StudentBank store={store} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} currencySymbol={currencySymbol}/>;
-  return <TeacherBank store={store} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} students={students??[]} currencySymbol={currencySymbol}/>;
+  return <TeacherBank store={store} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} students={students??[]} currencySymbol={currencySymbol} context={context} incomeTaxRateBp={incomeTaxRateBp}/>;
 }
 
 function StudentBank({store,savingsStore,loanStore,productStore,currencySymbol}:{store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;currencySymbol:string}){
@@ -174,7 +176,7 @@ function StudentReviewAssignments({loanStore,currencySymbol}:{loanStore:LoanStor
   </div>;
 }
 
-function TeacherBank({store,savingsStore,loanStore,productStore,students,currencySymbol}:{store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;students:Student[];currencySymbol:string}){
+function TeacherBank({store,savingsStore,loanStore,productStore,students,currencySymbol,context,incomeTaxRateBp}:{store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;students:Student[];currencySymbol:string;context?:SchoolContext;incomeTaxRateBp:number}){
   const [period,setPeriod]=useState(currentPeriod());
   const [items,setItems]=useState<SalaryPreviewItem[]|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState<{paid:number;skipped:number;failed:number}|null>(null);
@@ -213,10 +215,62 @@ function TeacherBank({store,savingsStore,loanStore,productStore,students,currenc
       </>}
     </>}
     <p className="muted">가입한 학생 계좌는 첫 월급 지급 때 자동으로 만들어집니다. 같은 달에 같은 직업으로 두 번 지급되지 않습니다.</p>
+    {context&&<TeacherIncomeTax store={store} context={context} initialRateBp={incomeTaxRateBp} period={period} currencySymbol={currencySymbol}/>}
     <TeacherProducts productStore={productStore} currencySymbol={currencySymbol}/>
     <TeacherSavingsMaturities savingsStore={savingsStore} currencySymbol={currencySymbol}/>
     <TeacherLoanRequests loanStore={loanStore} students={students} currencySymbol={currencySymbol}/>
   </section>;
+}
+
+function TeacherIncomeTax({store,context,initialRateBp,period,currencySymbol}:{store:FinanceStore;context:SchoolContext;initialRateBp:number;period:string;currencySymbol:string}){
+  const [rateBp,setRateBp]=useState(initialRateBp);
+  const [savingRate,setSavingRate]=useState(false),[rateSaved,setRateSaved]=useState(false);
+  const [items,setItems]=useState<IncomeTaxPreviewItem[]|null>(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState<{paid:number;skipped:number;failed:number}|null>(null);
+  useEffect(()=>{store.ensureCommunityFund().catch(e=>setError((e as Error).message))},[store]);
+  async function saveRate(){
+    if(!firebase)return;
+    setSavingRate(true);setError('');setRateSaved(false);
+    try{await updateIncomeTaxRate(firebase.db,context,rateBp);setRateSaved(true)}
+    catch(e){setError((e as Error).message)}
+    finally{setSavingRate(false)}
+  }
+  async function preview(){
+    setBusy(true);setError('');setResult(null);
+    try{setItems(await store.previewIncomeTax(period,rateBp))}
+    catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  async function confirm(){
+    if(!items)return;
+    setBusy(true);setError('');
+    try{const r=await store.settleIncomeTax(items);setResult(r);setItems(await store.previewIncomeTax(period,rateBp))}
+    catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  const payable=items?.filter(i=>!i.alreadyPaid)??[];
+  const total=payable.reduce((sum,i)=>sum+i.amountMinor,0);
+  return <div className="section">
+    <div className="section-heading"><h2>소득세</h2></div>
+    {error&&<p role="alert" className="error">{error}</p>}
+    {result&&<p role="status" className="success">징수 완료 {result.paid}건 · 이미 징수됨 {result.skipped}건 · 실패 {result.failed}건</p>}
+    <div className="assignment-form">
+      <label>세율(%, 0~20)<input type="number" min={0} max={20} step={0.1} value={rateBp/100} onChange={e=>{setRateBp(Math.round(Number(e.target.value)*100));setRateSaved(false)}}/></label>
+      <button className="button quiet" disabled={savingRate} onClick={saveRate}>세율 저장</button>
+      {rateSaved&&<span className="badge">저장됨</span>}
+    </div>
+    <div className="assignment-form">
+      <button className="button primary" disabled={busy} onClick={preview}>{period} 소득세 미리보기</button>
+    </div>
+    {items&&<>
+      {!items.length?<p className="empty">이번 정산월에 과세할 소득이 없어요(먼저 월급을 지급했는지 확인해 주세요).</p>:<>
+        <p className="muted">징수 대상 {payable.length}명 · 합계 {formatMoney(total,currencySymbol)}</p>
+        <div className="list">{items.map(i=><article key={i.journalId} className="task-row"><div className="task-row-head"><b>{i.studentName}</b><span className="badge">{i.alreadyPaid?'징수됨':formatMoney(i.amountMinor,currencySymbol)}</span></div><p className="muted">이번 달 소득 {formatMoney(i.incomeMinor,currencySymbol)}</p></article>)}</div>
+        {payable.length>0&&<button className="button primary section" disabled={busy} onClick={confirm}>{payable.length}명에게서 징수 확정</button>}
+      </>}
+    </>}
+    <p className="muted">세율은 교사만 설정할 수 있고 학생은 스스로 세금을 부과할 수 없어요. 걷은 세금은 공동기금 계좌에 모입니다.</p>
+  </div>;
 }
 
 function TeacherProducts({productStore,currencySymbol}:{productStore:FinancialProductStore;currencySymbol:string}){

@@ -33,11 +33,13 @@ service cloud.firestore {
       allow get: if active(sid);
       allow list, create, delete: if false;
       allow update: if teacher(sid)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','incomeTaxRateBp','updatedAt'])
         && request.resource.data.schoolName is string && request.resource.data.schoolName.size() > 0 && request.resource.data.schoolName.size() <= 80
         && request.resource.data.communityName is string && request.resource.data.communityName.size() > 0 && request.resource.data.communityName.size() <= 80
         && request.resource.data.currencyName is string && request.resource.data.currencyName.size() > 0 && request.resource.data.currencyName.size() <= 20
         && request.resource.data.currencySymbol is string && request.resource.data.currencySymbol.size() <= 10
+        // Nullable: existing schools predate this field (D-56 pattern of D-33's lastJournalId==null).
+        && (request.resource.data.incomeTaxRateBp == null || (request.resource.data.incomeTaxRateBp is int && request.resource.data.incomeTaxRateBp >= 0 && request.resource.data.incomeTaxRateBp <= 2000))
         && request.resource.data.updatedAt == request.time;
       match /members/{uid} {
         allow get: if active(sid) && (request.auth.uid == uid || teacher(sid));
@@ -285,7 +287,8 @@ service cloud.firestore {
           || (j.type=='SAVINGS_DEPOSIT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
           || (j.type=='INTEREST' && teacher(sid))
           || (j.type=='LOAN' && teacher(sid))
-          || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId);
+          || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
+          || (j.type=='INCOME_TAX' && teacher(sid));
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -314,7 +317,7 @@ service cloud.firestore {
         // school's total printed-minus-collected balance, not any individual's data) — a student
         // depositing into savings or repaying a loan must read its current balance in the same
         // transaction to credit/debit it correctly (see openSavings/repay in the data layer).
-        allow get: if teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId)) || accountId=='system-issuer';
+        allow get: if teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId)) || accountId=='system-issuer' || accountId=='community-fund';
         allow list: if teacher(sid) && bounded();
         // Only ever created by a teacher: the system issuer (once), a student account (lazily,
         // on first salary payment), or a business account (alongside the business itself).
@@ -322,6 +325,9 @@ service cloud.firestore {
           && request.resource.data.version==0 && request.resource.data.createdAt==request.time
           && (
             (accountId=='system-issuer' && request.resource.data.ownerType=='school' && request.resource.data.ownerId=='system-issuer'
+              && request.resource.data.balanceMinor==0 && request.resource.data.lastJournalId==null)
+            ||
+            (accountId=='community-fund' && request.resource.data.ownerType=='school' && request.resource.data.ownerId=='community-fund'
               && request.resource.data.balanceMinor==0 && request.resource.data.lastJournalId==null)
             ||
             (request.resource.data.ownerType=='student' && accountId==request.resource.data.ownerId
@@ -349,7 +355,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -550,6 +556,19 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // Income tax (§23): teacher-session settlement, one journal per student per period — not a
+      // contract-scoped flow like savings/loans, so it keeps its own shape (period, not
+      // contractId), mirroring salaryJournalShape rather than being folded into the issuer pair.
+      function incomeTaxJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','period','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','period','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.period.matches('^[0-9]{4}-[0-9]{2}$')
+          && d.debitAccountId==d.studentId && d.creditAccountId=='community-fund'
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       match /journals/{journalId} {
         allow get: if teacher(sid);
         allow list: if teacher(sid) && bounded();
@@ -606,6 +625,16 @@ service cloud.firestore {
             && get(loanPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
             && get(loanPath(request.resource.data.contractId)).data.status=='active'
             && get(loanPath(request.resource.data.contractId)).data.totalOwedMinor==request.resource.data.amountMinor
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          ||
+          // Income tax: teacher-session settlement (like SALARY/INTEREST), amount trusted from
+          // the app-computed preview (same tier as INTEREST — see D-51) rather than re-derived
+          // from summing SALARY journals in Rules, which can't aggregate across documents. The
+          // hard invariants Rules do enforce: target student is active, and the debit can never
+          // drive their balance negative.
+          (teacher(sid) && incomeTaxJournalShape() && request.resource.data.type=='INCOME_TAX'
+            && journalId==('tax~'+request.resource.data.studentId+'~'+request.resource.data.period)
+            && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.studentId)).data.status=='active'
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor);
         allow update, delete: if false;
       }

@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {toMinor,toMajor,formatMoney} from '../src/domain/money';
-import {salaryJournalId,periodPattern} from '../src/domain/finance';
+import {computeIncomeTax,incomeTaxJournalId,salaryJournalId,periodPattern,validateIncomeTaxRateBp} from '../src/domain/finance';
 describe('화폐 최소 단위 변환',()=>{
   it('원 단위를 최소 단위(100분의 1)로 변환한다',()=>{expect(toMinor(500)).toBe(50000);expect(toMinor(0)).toBe(0)});
   it('최소 단위를 다시 원 단위로 변환한다',()=>{expect(toMajor(50000)).toBe(500);expect(toMajor(150)).toBe(1.5)});
@@ -18,5 +18,23 @@ describe('월급 정산 식별자',()=>{
     expect(()=>salaryJournalId('bank~x','one','2026-09')).toThrow();
     expect(periodPattern('2026-09')).toBe(true);
     expect(periodPattern('2026/09')).toBe(false);
+  });
+});
+describe('소득세',()=>{
+  it('세율(basis point)로 세금을 계산한다',()=>{
+    expect(computeIncomeTax(50000,500)).toBe(2500); // 5%
+    expect(computeIncomeTax(50000,0)).toBe(0);
+    expect(computeIncomeTax(1,500)).toBe(0); // 반올림 내림
+  });
+  it('세율은 0~20% 사이만 허용한다',()=>{
+    expect(()=>validateIncomeTaxRateBp(-1)).toThrow();
+    expect(()=>validateIncomeTaxRateBp(2001)).toThrow();
+    expect(()=>validateIncomeTaxRateBp(1.5)).toThrow();
+    expect(()=>validateIncomeTaxRateBp(2000)).not.toThrow();
+  });
+  it('학생·월이 같으면 같은 정산 식별자를 만든다(중복 징수 방지)',()=>{
+    expect(incomeTaxJournalId('one','2026-09')).toBe(incomeTaxJournalId('one','2026-09'));
+    expect(incomeTaxJournalId('one','2026-09')).not.toBe(incomeTaxJournalId('one','2026-10'));
+    expect(incomeTaxJournalId('one','2026-09')).not.toBe(incomeTaxJournalId('two','2026-09'));
   });
 });
