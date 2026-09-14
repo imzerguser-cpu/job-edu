@@ -192,6 +192,17 @@ D-17이 정한 대로, `journal.type`을 여전히 폐쇄 열거형으로 유지
 **D-55. (재발 방지 기록) 저축 가입이 `system-issuer` 계좌를 갱신하지 않던 버그를 대출 구현 중 발견해 고쳤다 — 학생이 상대 계좌를 읽어야 하는 트랜잭션에는 `accounts` get 규칙이 별도로 필요하다.**
 대출 상환(`repay`)을 저축 만기 정산(`settleMaturities`)과 대칭으로 구현하려고 보니, 저축 가입(`openSavings`)이 애초에 학생 계좌만 차감하고 `system-issuer` 쪽은 한 번도 갱신하지 않았다는 것이 드러났다 — D-19가 약속한 "전체 계좌 잔액 합은 항상 0" 불변식이 저축 경로에서는 실제로 지켜지지 않은 채 배포까지 됐던 것이다(구매/월급은 원래 양쪽을 다 갱신하고 있어 문제없었다). 저축 가입에 issuer 계좌 갱신을 추가하면서 동시에 새 문제가 드러났다: `accounts/{accountId}` 규칙의 `get`은 `teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId))`였는데, 학생이 자기 트랜잭션 안에서 `system-issuer`(accountId가 자신의 studentId도 아니고 business도 아님) 계좌를 읽으려 하면 거부됐다 — 이는 대출 상환에서도 똑같이 발생할 문제였다. 두 경우 모두 학생이 "상대방"(issuer) 계좌의 현재 잔액을 읽어야 정확한 증가분을 계산해 쓸 수 있다는, 사업 계좌에 이미 적용했던 것과 같은 이유(D-25)다. `accountId=='system-issuer'`를 get 조건에 추가해 해결했다 — 발행 계좌 잔액은 특정 학생의 개인정보가 아니라 학교 전체의 공유 정보이므로(사업 계좌와 같은 성격) 노출에 문제가 없다고 판단했다. **재사용 가능한 교훈**: 학생이 자기 자신 외의 계좌를 트랜잭션에서 다루는 새 기능을 만들 때는, 그 계좌에 대한 `get` 권한이 실제로 있는지 먼저 확인한다 — 트랜잭션 로직만 맞고 read 권한을 빠뜨리면 에뮬레이터에서 "evaluation error"로만 나타나 원인을 즉시 알기 어렵다.
 
+## 학생 비밀번호 재설정 (교사 인앱 셀프서비스)
+
+**D-56. 교사가 앱 안에서 학생 비밀번호를 재설정하는 기능은 Firebase Cloud Functions가 아니라 Cloudflare Workers로 구현했다.**
+브라우저는 원칙적으로 남의 Firebase Auth 비밀번호를 절대 바꿀 수 없다(서비스 계정 자격 증명을 브라우저에 넣으면 개발자 도구로 즉시 탈취 가능) — 이런 "교사가 검증된 뒤에만 실행되는 서버 로직"은 어떤 식으로든 브라우저 바깥의 신뢰된 실행 환경이 필요하다. Firebase 자체의 Cloud Functions는 사용량이 0이어도 Blaze(종량제, 카드 등록 필수) 요금제를 요구하는데, 이 프로젝트는 카드 등록 없이 진행하기로 했다(사용자 결정). Cloudflare Workers 무료 티어는 카드 등록 없이 정확히 같은 역할(서비스 계정 자격 증명을 비밀 저장소에 보관하고, 검증된 요청에만 응답)을 할 수 있어 이쪽을 선택했다. 대가로 Firebase 프로젝트 하나로 끝나지 않고 Cloudflare 계정·`cf-worker/` 배포를 별도로 유지해야 한다 — 학교 하나 규모에서는 감수할 만한 트레이드오프로 판단했다.
+
+**D-57. `cf-worker`는 Firebase Admin SDK 대신 Google REST API(OAuth2 JWT-bearer + Identity Toolkit/Firestore REST)를 직접 호출한다.**
+`firebase-admin` Node SDK는 Cloudflare Workers 런타임(Node 내장 모듈이 없는 V8 isolate)에서 동작하지 않는다. 대신 서비스 계정의 `client_email`/`private_key`로 직접 RS256 JWT를 서명해(`jose`, WebCrypto 기반이라 Workers에서 동작) `https://oauth2.googleapis.com/token`에서 OAuth2 액세스 토큰을 받고, 그 토큰으로 Firestore REST(`GET .../schools/{id}/members/{uid}`, 교사 권한 확인용)와 Identity Toolkit REST(`accounts:lookup`/`accounts:update`, 학생 계정 조회·비밀번호 변경용)를 직접 호출한다. 요청자 신원은 클라이언트가 보낸 Firebase ID 토큰을 Google의 공개 JWKS로 직접 검증해(`jose`의 `createRemoteJWKSet`) 확인한다 — Firebase Admin SDK가 내부적으로 하는 것과 동일한 신뢰 모델이며, 별도 세션이나 자체 발급 토큰을 두지 않는다.
+
+**D-58. `accounts:lookup`/`accounts:update`는 API 키가 아니라 OAuth 토큰으로 호출하므로 `https://identitytoolkit.googleapis.com/v1/accounts:*` 경로를 그대로 쓴다(`projects/{id}/accounts:*`가 아니어도 동작함을 확인).**
+처음엔 "API 키 대신 OAuth를 쓸 때는 `projects/{projectId}/accounts:*` 경로가 필요할 것"이라 추측하고 그렇게 의심했으나, curl로 직접 두 경로를 나란히 비교해보니 둘 다 정상 동작했다 — 실제 원인은 별개로, 테스트에 쓴 curl 명령이 한글이 섞인 JSON을 셸 인자로 바로 넘기면서 인코딩이 깨져 "학생을 찾을 수 없음"으로 잘못 보였던 것이었다(파일로 써서 `--data-binary @file`로 넘기니 정상 동작). **재사용 가능한 교훈**: 한글(또는 비ASCII) 문자열이 포함된 JSON을 curl로 테스트할 때는 `-d '...'` 인라인 인자를 쓰지 말고, 항상 파일에 써서 `--data-binary @file`로 넘긴다 — 그렇지 않으면 애플리케이션 코드가 아니라 셸/터미널의 인코딩 문제를 "버그"로 오인하게 된다. 실제 배포된 Worker 코드 자체는 `fetch(...,{body:JSON.stringify(...)})`를 쓰므로 이 문제와 무관했다(정상 동작을 처음부터 계속 하고 있었음).
+
 ## 문서화 방식
 
 **D-13. `docs/IMPLEMENTATION_PLAN.md`는 유지하고 새로 쓰지 않는다.**
