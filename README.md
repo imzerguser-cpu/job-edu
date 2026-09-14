@@ -35,7 +35,7 @@ node scripts/admin-bootstrap.mjs reset-student-password --key <service-account.j
 
 Firebase는 한 번 설정된 비밀번호를 관리자도 다시 읽어올 수 없습니다(해시만 저장됨). 그래서 이 스크립트가 만들거나 바꾼 비밀번호는 모두 로컬 "비밀번호 장부"(`.student-passwords.json`, git 추적 제외)에 남기고 실행할 때마다 `student-accounts.csv`를 그 장부 기준으로 새로 씁니다 — CSV를 열어보면 항상 각 학생의 최신 비밀번호를 볼 수 있습니다. 특정 학생의 비밀번호를 바꾸고 싶으면 `reset-student-password`를 실행하면 됩니다(서비스 계정 키가 있는 관리자만 실행할 수 있는 오프라인 도구입니다). 교사 계정은 이와 별개로 로그인 후 "운영 현황" 화면에서 스스로 비밀번호를 바꿀 수 있습니다.
 
-학생 비밀번호는 터미널 없이 **앱 안에서도** 바꿀 수 있습니다 — 교사로 로그인해 학생 명단의 "비밀번호 재설정" 버튼을 누르면 됩니다. 이건 `cf-worker/`에 배포된 Cloudflare Workers 관리자 엔드포인트가 처리합니다(카드 등록이 필요한 Firebase Cloud Functions 대신 선택함, 배경은 `docs/DECISIONS.md` D-56~D-58 참고). Worker를 다시 배포하려면:
+학생 비밀번호는 터미널 없이 **앱 안에서도** 바꿀 수 있습니다 — 교사로 로그인해 학생 명단의 "비밀번호 재설정" 버튼을 누르면 됩니다. 여러 명을 한 번에 바꾸려면 명단 화면의 "비밀번호 일괄 변경"에서 구글 시트 링크(`이름,학년,학교코드,비밀번호` 순, `student-accounts.csv`와 같은 열 순서)를 붙여넣으면 됩니다(한 번에 최대 20명, `docs/DECISIONS.md` D-80~D-82). 이건 `cf-worker/`에 배포된 Cloudflare Workers 관리자 엔드포인트가 처리합니다(카드 등록이 필요한 Firebase Cloud Functions 대신 선택함, 배경은 `docs/DECISIONS.md` D-56~D-58 참고). Worker를 다시 배포하려면:
 
 ```sh
 cd cf-worker

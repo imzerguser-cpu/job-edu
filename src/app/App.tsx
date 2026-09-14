@@ -26,6 +26,7 @@ import {ViolationWorkspace} from '../features/civic/ViolationWorkspace';
 import {OperationsWorkspace} from '../features/admin/OperationsWorkspace';
 
 const ADMIN_WORKER_URL='https://jobedu-admin.jobedu-admin-worker.workers.dev';
+interface BulkRowResult {name:string;grade:string;ok:boolean;password?:string;error?:string}
 function readableError(error:unknown){
   const code=(error as {code?:string}).code;
   if(code==='auth/configuration-not-found'||code==='auth/operation-not-allowed')return '학교 로그인 설정을 준비하고 있습니다. 관리자에게 문의하거나 가상 시민 체험을 이용해 주세요.';
@@ -108,6 +109,7 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
   const teacher=isTeacher(context.membership),[students,setStudents]=useState<Student[]>([]),[citizen,setCitizen]=useState<Student|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(true),[refresh,setRefresh]=useState(0),[importing,setImporting]=useState(false);
   const [editingStudent,setEditingStudent]=useState<Student|null>(null),[savingStudent,setSavingStudent]=useState(false);
   const [resettingStudent,setResettingStudent]=useState<Student|null>(null),[resetBusy,setResetBusy]=useState(false),[resetResult,setResetResult]=useState<{password:string}|null>(null);
+  const [bulkOpen,setBulkOpen]=useState(false),[bulkBusy,setBulkBusy]=useState(false),[bulkResults,setBulkResults]=useState<BulkRowResult[]|null>(null);
   async function saveStudent(e:FormEvent<HTMLFormElement>){
     e.preventDefault();if(!editingStudent||savingStudent)return;
     const f=new FormData(e.currentTarget);setSavingStudent(true);setError('');
@@ -134,6 +136,24 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
     }catch(e){setError(readableError(e))}
     finally{setResetBusy(false)}
   }
+  async function bulkReset(e:FormEvent<HTMLFormElement>){
+    e.preventDefault();if(bulkBusy)return;
+    const sheetUrl=String(new FormData(e.currentTarget).get('sheetUrl')||'').trim();
+    if(!sheetUrl)return;
+    setBulkBusy(true);setError('');setBulkResults(null);
+    try{
+      const idToken=await firebase!.auth.currentUser!.getIdToken();
+      const res=await fetch(ADMIN_WORKER_URL,{
+        method:'POST',
+        headers:{'Content-Type':'application/json',Authorization:`Bearer ${idToken}`},
+        body:JSON.stringify({schoolId:context.schoolId,sheetUrl}),
+      });
+      const data=await res.json() as {results?:BulkRowResult[];error?:string};
+      if(!res.ok||!data.results)throw new Error(data.error??'일괄 변경에 실패했습니다.');
+      setBulkResults(data.results);
+    }catch(e){setError(readableError(e))}
+    finally{setBulkBusy(false)}
+  }
   useEffect(()=>{let alive=true;setLoading(true);setStudents([]);setCitizen(null);setError('');const client=firebase!;
     (teacher?listStudents(client.db,context).then(s=>{if(alive)setStudents(s)}):getCitizen(client.db,context).then(s=>{if(alive)setCitizen(s)})).catch(e=>{if(alive)setError(readableError(e))}).finally(()=>{if(alive)setLoading(false)});return()=>{alive=false};
   },[context,teacher,refresh]);
@@ -152,5 +172,21 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
       <div className="header-actions"><button className="button primary" disabled={resetBusy}>{resetBusy?'처리 중…':'재설정'}</button><button type="button" className="button quiet" onClick={()=>{setResettingStudent(null);setResetResult(null)}}>닫기</button></div>
       {resetResult&&<p role="status" className="notice">새 비밀번호: <b>{resetResult.password}</b> — 학생에게 알려주세요.</p>}
     </form>}
+    <section className="panel section">
+      <div className="section-heading"><h3>비밀번호 일괄 변경</h3><button type="button" className="button quiet" onClick={()=>setBulkOpen(!bulkOpen)}>{bulkOpen?'닫기':'구글 시트로 가져오기'}</button></div>
+      {bulkOpen&&<>
+        <p className="muted">구글 시트에 <b>이름,학년,학교코드,비밀번호</b> 순서로(첫 줄은 제목) 학생을 정리하고 "링크가 있는 모든 사용자 - 뷰어"로 공유한 뒤, 그 링크를 붙여넣어 주세요. 비밀번호 칸을 비워두면 자동 생성됩니다. 한 번에 최대 20명까지 처리됩니다.</p>
+        <form className="assignment-form" onSubmit={bulkReset}>
+          <label>구글 시트 링크<input name="sheetUrl" type="url" required placeholder="https://docs.google.com/spreadsheets/d/..."/></label>
+          <button className="button primary" disabled={bulkBusy}>{bulkBusy?'처리 중…':'가져와서 적용'}</button>
+        </form>
+        {bulkResults&&<>
+          <p className="muted">성공 {bulkResults.filter(r=>r.ok).length}명 · 실패 {bulkResults.filter(r=>!r.ok).length}명</p>
+          <div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>결과</th></tr></thead><tbody>
+            {bulkResults.map((r,i)=><tr key={i}><td>{r.name}</td><td>{r.grade}학년</td><td>{r.ok?<>새 비밀번호: <b>{r.password}</b></>:<span className="error">{r.error}</span>}</td></tr>)}
+          </tbody></table></div>
+        </>}
+      </>}
+    </section>
     {importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={true} students={students} studentId={context.membership.studentId??undefined}/></div><div className="section"><TaskWorkspace taskStore={taskStore} careerStore={store} teacher={true} students={students}/></div><div className="section"><BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} incomeTaxRateBp={school.incomeTaxRateBp}/></div><div className="section"><StoreWorkspace store={businessStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} businessTaxRateBp={school.businessTaxRateBp}/></div><div className="section"><CivicWorkspace store={proposalStore} teacher={true} students={students}/></div><div className="section"><ViolationWorkspace store={violationStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><OperationsWorkspace auditStore={auditStore} careerStore={store} taskStore={taskStore} businessStore={businessStore} proposalStore={proposalStore} financeStore={financeStore} students={students} currencySymbol={school.currencyName}/></div></>}</>;
 }

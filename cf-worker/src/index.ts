@@ -94,6 +94,69 @@ async function setPassword(accessToken:string,uid:string,password:string){
   if(!res.ok)throw new Error('비밀번호 변경에 실패했습니다: '+await res.text());
 }
 
+// Accepts a normal "share" link (uses the doc id to build the CSV export URL) or an
+// already-CSV link (publish-to-web, or an export URL someone already built) and passes it
+// straight through. Google's /export endpoint has no CORS header for third-party origins, which
+// is exactly why this has to happen server-side in the Worker rather than the browser.
+function normalizeSheetUrl(raw:string){
+  if(/[?&](output|format)=csv/i.test(raw))return raw;
+  const m=raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  // A Google Sheets *edit* link needs converting to its CSV export form. Anything else (a direct
+  // CSV link from elsewhere) is passed through unchanged and simply fetched as-is.
+  return m?`https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv`:raw;
+}
+// Minimal CSV parser: handles quoted fields (with escaped "" and embedded commas/newlines),
+// strips a UTF-8 BOM, skips the header row. Good enough for the small, teacher-authored sheets
+// this endpoint expects — not a general-purpose CSV library.
+function parseCsv(text:string):string[][]{
+  const rows:string[][]=[];let field='',row:string[]=[],inQuotes=false;
+  const s=text.replace(/^﻿/,'').replace(/\r\n/g,'\n');
+  for(let i=0;i<s.length;i++){
+    const c=s[i];
+    if(inQuotes){
+      if(c==='"'){if(s[i+1]==='"'){field+='"';i++}else inQuotes=false}
+      else field+=c;
+    }else if(c==='"')inQuotes=true;
+    else if(c===','){row.push(field);field=''}
+    else if(c==='\n'){row.push(field);rows.push(row);row=[];field=''}
+    else field+=c;
+  }
+  if(field.length||row.length){row.push(field);rows.push(row)}
+  return rows.filter(r=>r.some(c=>c.trim().length>0)).slice(1); // drop header row
+}
+interface BulkRowResult {name:string;grade:string;ok:boolean;password?:string;error?:string}
+// Same {이름,학년,학교코드,비밀번호} column order as scripts/admin-bootstrap.mjs's own
+// student-accounts.csv output — a teacher can literally take that file, edit it in Sheets
+// (change some passwords, leave others blank to auto-generate), share the link, and paste it
+// here instead of re-running the offline script per student.
+async function bulkResetPasswords(accessToken:string,sheetUrl:string):Promise<BulkRowResult[]>{
+  const csvRes=await fetch(normalizeSheetUrl(sheetUrl));
+  if(!csvRes.ok)throw new Error('시트를 불러오지 못했습니다. 링크 공유 설정(보기 권한)을 확인해 주세요.');
+  const rows=parseCsv(await csvRes.text());
+  if(!rows.length)throw new Error('시트에서 학생 행을 찾지 못했습니다.');
+  // Cloudflare's free tier caps subrequests per invocation (~50); each row costs two fetches
+  // (lookup + set password) plus a few fixed calls (OAuth token, teacher check, the sheet
+  // itself), so this stays comfortably under that with room to spare. Split larger rosters into
+  // more than one paste.
+  if(rows.length>20)throw new Error('한 번에 최대 20명까지 처리할 수 있습니다. 명단을 나눠서 올려 주세요.');
+  const results:BulkRowResult[]=[];
+  for(const cols of rows){
+    const [name,grade,schoolCode,passwordCol]=cols.map(c=>c.trim());
+    if(!name||!grade||!schoolCode){results.push({name:name||'(이름 없음)',grade:grade||'',ok:false,error:'이름·학년·학교코드를 확인해 주세요.'});continue}
+    try{
+      const email=studentLoginEmail(schoolCode,grade,name);
+      const targetUid=await lookupUid(accessToken,email);
+      if(!targetUid){results.push({name,grade,ok:false,error:'계정을 찾을 수 없습니다.'});continue}
+      const password=passwordCol||randomPassword();
+      await setPassword(accessToken,targetUid,password);
+      results.push({name,grade,ok:true,password});
+    }catch(err){
+      results.push({name,grade,ok:false,error:err instanceof Error?err.message:'처리 실패'});
+    }
+  }
+  return results;
+}
+
 export default {
   async fetch(request:Request,env:Env):Promise<Response>{
     const origin=env.ALLOWED_ORIGIN;
@@ -104,14 +167,22 @@ export default {
       if(!idToken)return json({error:'로그인이 필요합니다.'},401,origin);
       const uid=await verifyCallerUid(idToken,env.FIREBASE_PROJECT_ID);
 
-      const body=await request.json() as {schoolId?:string;schoolCode?:string;grade?:string;name?:string;password?:string};
-      const {schoolId,schoolCode,grade,name}=body;
-      if(!schoolId||!schoolCode||!grade||!name)return json({error:'학교·학년·이름을 모두 입력해 주세요.'},400,origin);
-      const password=(body.password??'').trim()||randomPassword();
-      if(password.length<6)return json({error:'비밀번호는 6자 이상이어야 합니다.'},400,origin);
+      const body=await request.json() as {schoolId?:string;schoolCode?:string;grade?:string;name?:string;password?:string;sheetUrl?:string};
+      const {schoolId}=body;
+      if(!schoolId)return json({error:'학교 정보가 없습니다.'},400,origin);
 
       const accessToken=await googleAccessToken(env,'https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/datastore');
       if(!await isActiveTeacher(env,accessToken,schoolId,uid))return json({error:'교사 권한이 필요합니다.'},403,origin);
+
+      if(body.sheetUrl){
+        const results=await bulkResetPasswords(accessToken,body.sheetUrl);
+        return json({results,succeeded:results.filter(r=>r.ok).length,failed:results.filter(r=>!r.ok).length},200,origin);
+      }
+
+      const {schoolCode,grade,name}=body;
+      if(!schoolCode||!grade||!name)return json({error:'학교 코드·학년·이름을 모두 입력해 주세요.'},400,origin);
+      const password=(body.password??'').trim()||randomPassword();
+      if(password.length<6)return json({error:'비밀번호는 6자 이상이어야 합니다.'},400,origin);
 
       const email=studentLoginEmail(schoolCode,grade,name);
       const targetUid=await lookupUid(accessToken,email);
