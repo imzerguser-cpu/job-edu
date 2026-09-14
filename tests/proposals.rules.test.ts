@@ -11,7 +11,7 @@ const context=(role:'student'|'teacher',sid='a',studentId='one'):SchoolContext=>
 const store=(role:'student'|'teacher',sid='a',studentId='one')=>{const c=context(role,sid,studentId);return firestoreProposals(db(c.uid),c)};
 const jobFields:JobProposalFields={title:'번역가',purpose:'외국 친구를 도와요',tasks:'통역, 번역',beneficiary:'전학생',suggestedSalaryMinor:20000,tools:'사전',reason:'필요해요'};
 const bizFields:BusinessProposalFields={name:'분식집',product:'떡볶이',customers:'전교생',price:'500원',capital:'10000',staffNeeded:'2명',expectedRevenue:'많이',expectedCost:'재료비',advantages:'맛있음',risks:'재고 관리'};
-beforeAll(async()=>{env=await initializeTestEnvironment({projectId:'demo-little-society',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync('firebase/firestore.rules','utf8')}})});
+beforeAll(async()=>{env=await initializeTestEnvironment({projectId:'demo-little-society',firestore:{host:'127.0.0.1',port:8082,rules:readFileSync('firebase/firestore.rules','utf8')}})});
 beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisabled(async c=>{
   const db=c.firestore();
   for(const sid of ['a','b']){

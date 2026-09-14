@@ -1,5 +1,5 @@
 export type Role = 'student' | 'teacher' | 'owner';
-export interface School { schoolId:string; schoolName:string; communityName:string; currencyName:string; currencySymbol:string; timezone:string; status:'active'|'inactive'; schemaVersion:1; incomeTaxRateBp:number }
+export interface School { schoolId:string; schoolName:string; communityName:string; currencyName:string; currencySymbol:string; timezone:string; status:'active'|'inactive'; schemaVersion:1; incomeTaxRateBp:number; businessTaxRateBp:number }
 export interface Membership { schoolId:string; role:Role; studentId:string|null; status:'active'|'inactive' }
 export interface SchoolContext { schoolId:string; uid:string; membership:Membership }
 export interface Student { id:string; schoolId:string; name:string; grade:number; className:string|null; citizenCode:string; schoolYear:number; status:'active'|'graduated'|'transferred'; schemaVersion:1 }

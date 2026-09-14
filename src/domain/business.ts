@@ -12,3 +12,18 @@ export function validateProduct(p:Product){
   if(!(['active','paused'] as const).includes(p.status))throw new Error('판매 상태를 확인해 주세요.');
 }
 export function canBuy(business:Business,product:Product){return business.status==='active'&&product.status==='active'&&product.stock>0}
+
+// 사업 세금(§23) — 소득세(finance.ts)와 같은 설계: 사업 계좌 잔액이 아니라 그 정산월에 실제로
+// 발생한 매출(PURCHASE 저널로 사업 계좌에 쌓인 금액)에만 매긴다.
+export interface BusinessTaxPreviewItem {businessId:string;businessName:string;revenueMinor:number;amountMinor:number;period:string;journalId:string;alreadyPaid:boolean}
+export function validateBusinessTaxRateBp(rateBp:number){
+  if(!Number.isInteger(rateBp)||rateBp<0||rateBp>2000)throw new Error('세율은 0~20% 사이로 설정해 주세요.');
+}
+export function computeBusinessTax(revenueMinor:number,rateBp:number){
+  return Math.floor(revenueMinor*rateBp/10000);
+}
+export function businessTaxJournalId(businessId:string,period:string){
+  if(!/^\d{4}-\d{2}$/.test(period))throw new Error('정산 월(YYYY-MM)을 확인해 주세요.');
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(businessId))throw new Error('사업 식별자를 확인해 주세요.');
+  return `businessTax~${businessId}~${period}`;
+}

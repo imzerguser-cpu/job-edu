@@ -1,11 +1,13 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {formatMoney} from '../../domain/money';
-import type {Business,Catalog,Product} from '../../domain/business';
+import {formatMoney,currentPeriod} from '../../domain/money';
+import type {Business,BusinessTaxPreviewItem,Catalog,Product} from '../../domain/business';
 import type {AccountEntry} from '../../domain/finance';
-import type {Student} from '../../domain/model';
+import type {SchoolContext,Student} from '../../domain/model';
 import type {BusinessStore} from '../../data/businessRepository';
+import {updateBusinessTaxRate} from '../../data/schoolRepository';
+import {firebase} from '../../data/firebase';
 
-export function StoreWorkspace({store,teacher,students,currencySymbol='마동',studentId}:{store:BusinessStore;teacher:boolean;students:Student[];currencySymbol?:string;studentId?:string}){
+export function StoreWorkspace({store,teacher,students,currencySymbol='마동',studentId,context,businessTaxRateBp=0}:{store:BusinessStore;teacher:boolean;students:Student[];currencySymbol?:string;studentId?:string;context?:SchoolContext;businessTaxRateBp?:number}){
   const [catalog,setCatalog]=useState<Catalog>({businesses:[],products:[]});
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [creatingBusiness,setCreatingBusiness]=useState(false);
@@ -61,6 +63,7 @@ export function StoreWorkspace({store,teacher,students,currencySymbol='마동',s
         {canManage(b)&&<BusinessSales store={store} businessId={b.id} currencySymbol={currencySymbol}/>}
       </article>)}
     </div>}
+    {teacher&&context&&<TeacherBusinessTax store={store} context={context} initialRateBp={businessTaxRateBp} currencySymbol={currencySymbol}/>}
   </section>;
 }
 
@@ -85,5 +88,58 @@ function BusinessSales({store,businessId,currencySymbol}:{store:BusinessStore;bu
       <p className="muted">사업 계좌 잔액 {formatMoney(balance??0,currencySymbol)}</p>
       {!entries.length?<p className="empty">아직 거래 내역이 없어요.</p>:<div className="list">{entries.map(e=><article key={e.id} className="task-row"><div className="task-row-head"><b>{e.label}</b><span className="badge">{e.deltaMinor>=0?'+':''}{formatMoney(e.deltaMinor,currencySymbol)}</span></div></article>)}</div>}
     </>}
+  </div>;
+}
+
+function TeacherBusinessTax({store,context,initialRateBp,currencySymbol}:{store:BusinessStore;context:SchoolContext;initialRateBp:number;currencySymbol:string}){
+  const [period,setPeriod]=useState(currentPeriod());
+  const [rateBp,setRateBp]=useState(initialRateBp);
+  const [savingRate,setSavingRate]=useState(false),[rateSaved,setRateSaved]=useState(false);
+  const [items,setItems]=useState<BusinessTaxPreviewItem[]|null>(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState<{paid:number;skipped:number;failed:number}|null>(null);
+  useEffect(()=>{store.ensureCommunityFund().catch(e=>setError((e as Error).message))},[store]);
+  async function saveRate(){
+    if(!firebase)return;
+    setSavingRate(true);setError('');setRateSaved(false);
+    try{await updateBusinessTaxRate(firebase.db,context,rateBp);setRateSaved(true)}
+    catch(e){setError((e as Error).message)}
+    finally{setSavingRate(false)}
+  }
+  async function preview(){
+    setBusy(true);setError('');setResult(null);
+    try{setItems(await store.previewBusinessTax(period,rateBp))}
+    catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  async function confirm(){
+    if(!items)return;
+    setBusy(true);setError('');
+    try{const r=await store.settleBusinessTax(items);setResult(r);setItems(await store.previewBusinessTax(period,rateBp))}
+    catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  const payable=items?.filter(i=>!i.alreadyPaid)??[];
+  const total=payable.reduce((sum,i)=>sum+i.amountMinor,0);
+  return <div className="section">
+    <div className="section-heading"><h2>사업 세금</h2></div>
+    {error&&<p role="alert" className="error">{error}</p>}
+    {result&&<p role="status" className="success">징수 완료 {result.paid}건 · 이미 징수됨 {result.skipped}건 · 실패 {result.failed}건</p>}
+    <div className="assignment-form">
+      <label>세율(%, 0~20)<input type="number" min={0} max={20} step={0.1} value={rateBp/100} onChange={e=>{setRateBp(Math.round(Number(e.target.value)*100));setRateSaved(false)}}/></label>
+      <button className="button quiet" disabled={savingRate} onClick={saveRate}>세율 저장</button>
+      {rateSaved&&<span className="badge">저장됨</span>}
+    </div>
+    <div className="assignment-form">
+      <label>정산 월<input type="month" value={period} onChange={e=>{setPeriod(e.target.value);setItems(null);setResult(null)}}/></label>
+      <button className="button primary" disabled={busy} onClick={preview}>미리보기</button>
+    </div>
+    {items&&<>
+      {!items.length?<p className="empty">이번 정산월에 과세할 매출이 있는 사업이 없어요.</p>:<>
+        <p className="muted">징수 대상 {payable.length}곳 · 합계 {formatMoney(total,currencySymbol)}</p>
+        <div className="list">{items.map(i=><article key={i.journalId} className="task-row"><div className="task-row-head"><b>{i.businessName}</b><span className="badge">{i.alreadyPaid?'징수됨':formatMoney(i.amountMinor,currencySymbol)}</span></div><p className="muted">이번 달 매출 {formatMoney(i.revenueMinor,currencySymbol)}</p></article>)}</div>
+        {payable.length>0&&<button className="button primary section" disabled={busy} onClick={confirm}>{payable.length}곳에서 징수 확정</button>}
+      </>}
+    </>}
+    <p className="muted">세율은 교사만 설정할 수 있고 학생은 스스로 세금을 부과할 수 없어요. 걷은 세금은 공동기금 계좌에 모입니다.</p>
   </div>;
 }

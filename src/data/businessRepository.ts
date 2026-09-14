@@ -1,9 +1,9 @@
-import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,runTransaction,serverTimestamp} from 'firebase/firestore';
+import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,runTransaction,serverTimestamp,type Timestamp} from 'firebase/firestore';
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant} from '../domain/jobs';
-import {validateBusiness,validateProduct,type Business,type Catalog,type Product} from '../domain/business';
-import type {Account,AccountEntry} from '../domain/finance';
+import {businessTaxJournalId,computeBusinessTax,validateBusiness,validateProduct,type Business,type BusinessTaxPreviewItem,type Catalog,type Product} from '../domain/business';
+import {COMMUNITY_FUND_ACCOUNT_ID,type Account,type AccountEntry} from '../domain/finance';
 export interface BusinessStore {
   loadCatalog():Promise<Catalog>;
   createBusiness(name:string,ownerStudentId:string):Promise<void>;
@@ -12,6 +12,9 @@ export interface BusinessStore {
   buy(businessId:string,productId:string):Promise<void>;
   businessAccount(businessId:string):Promise<Account|null>;
   businessEntries(businessId:string):Promise<AccountEntry[]>;
+  ensureCommunityFund():Promise<void>;
+  previewBusinessTax(period:string,rateBp:number):Promise<BusinessTaxPreviewItem[]>;
+  settleBusinessTax(items:BusinessTaxPreviewItem[]):Promise<{paid:number;skipped:number;failed:number}>;
 }
 export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -93,6 +96,71 @@ export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessSt
     async businessEntries(businessId){
       const snap=await getDocsFromServer(query(collection(ref('accounts',businessId),'entries'),orderBy('postedAt','desc'),limit(20)));
       return snap.docs.map(d=>({...d.data(),id:d.id} as AccountEntry));
+    },
+    // Shared with financeRepository's own ensureCommunityFund (same fixed account id) — each
+    // store independently ensures the same account, whichever runs first creates it (D-63-adjacent
+    // reasoning to D-17: not worth a shared module for one three-line idempotent bootstrap).
+    async ensureCommunityFund(){
+      teacher();
+      const target=ref('accounts',COMMUNITY_FUND_ACCOUNT_ID);
+      if((await getDocFromServer(target)).exists())return;
+      await runTransaction(db,async tx=>{
+        if((await tx.get(target)).exists())return;
+        tx.set(target,{schoolId:context.schoolId,ownerType:'school',ownerId:COMMUNITY_FUND_ACCOUNT_ID,balanceMinor:0,version:0,lastJournalId:null,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+      });
+    },
+    // Business tax (§23) taxes revenue, not balance — the same reasoning as income tax
+    // (finance.ts computeIncomeTax). PURCHASE journals have no `period` field (unlike SALARY), so
+    // this reads each business's own entries subcollection (already scoped small, D-65) rather
+    // than querying the whole school's journals, and buckets by postedAt's calendar month.
+    async previewBusinessTax(period,rateBp){
+      teacher();
+      const businessesSnap=await getDocsFromServer(query(collection(db,schoolPath(context,'businesses')),limit(100)));
+      const businesses=businessesSnap.docs.map(d=>({...d.data(),id:d.id} as Business));
+      const items:BusinessTaxPreviewItem[]=[];
+      for(const b of businesses){
+        const entriesSnap=await getDocsFromServer(query(collection(ref('accounts',b.id),'entries'),orderBy('postedAt','desc'),limit(100)));
+        let revenueMinor=0;
+        for(const d of entriesSnap.docs){
+          const e=d.data() as {type:string;deltaMinor:number;postedAt:Timestamp};
+          if(e.type!=='PURCHASE'||e.deltaMinor<=0)continue;
+          const dt=e.postedAt.toDate();
+          if(`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`===period)revenueMinor+=e.deltaMinor;
+        }
+        if(revenueMinor<=0)continue;
+        const amountMinor=computeBusinessTax(revenueMinor,rateBp);
+        if(amountMinor<=0)continue;
+        items.push({businessId:b.id,businessName:b.name,revenueMinor,amountMinor,period,journalId:businessTaxJournalId(b.id,period),alreadyPaid:false});
+      }
+      const checks=await Promise.all(items.map(it=>getDocFromServer(ref('journals',it.journalId))));
+      return items.map((it,i)=>({...it,alreadyPaid:checks[i].exists()}));
+    },
+    async settleBusinessTax(items){
+      teacher();
+      let paid=0,skipped=0,failed=0;
+      for(const item of items){
+        if(item.alreadyPaid){skipped++;continue}
+        try{
+          await runTransaction(db,async tx=>{
+            const journalRef=ref('journals',item.journalId);
+            if((await tx.get(journalRef)).exists())return;
+            const fundRef=ref('accounts',COMMUNITY_FUND_ACCOUNT_ID),businessAccountRef=ref('accounts',item.businessId);
+            const [fund,businessAccount]=await Promise.all([tx.get(fundRef),tx.get(businessAccountRef)]);
+            if(!fund.exists())throw new Error('공동기금 계좌가 준비되지 않았습니다. 먼저 계좌를 준비해 주세요.');
+            if(!businessAccount.exists()||businessAccount.data().balanceMinor<item.amountMinor)throw new Error('잔액이 부족합니다.');
+            tx.set(journalRef,{schoolId:context.schoolId,type:'BUSINESS_TAX',businessId:item.businessId,period:item.period,debitAccountId:item.businessId,creditAccountId:COMMUNITY_FUND_ACCOUNT_ID,amountMinor:item.amountMinor,postedBy:context.uid,schemaVersion:1,createdAt:serverTimestamp()});
+            const businessAfter=businessAccount.data().balanceMinor-item.amountMinor;
+            tx.update(businessAccountRef,{balanceMinor:businessAfter,version:businessAccount.data().version+1,lastJournalId:item.journalId,updatedAt:serverTimestamp()});
+            tx.set(doc(collection(businessAccountRef,'entries'),item.journalId),{schoolId:context.schoolId,journalId:item.journalId,type:'BUSINESS_TAX',deltaMinor:-item.amountMinor,balanceAfterMinor:businessAfter,label:'사업 세금',postedAt:serverTimestamp()});
+            const fundAfter=fund.data().balanceMinor+item.amountMinor;
+            tx.update(fundRef,{balanceMinor:fundAfter,version:fund.data().version+1,lastJournalId:item.journalId,updatedAt:serverTimestamp()});
+            tx.set(doc(collection(fundRef,'entries'),item.journalId),{schoolId:context.schoolId,journalId:item.journalId,type:'BUSINESS_TAX',deltaMinor:item.amountMinor,balanceAfterMinor:fundAfter,label:`사업 세금 · ${item.businessName}`,postedAt:serverTimestamp()});
+            tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'business_tax',targetType:'journal',targetId:item.journalId,detail:`${item.businessName} · ${item.amountMinor}`,createdAt:serverTimestamp()});
+          });
+          paid++;
+        }catch{failed++}
+      }
+      return {paid,skipped,failed};
     },
   };
 }

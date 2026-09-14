@@ -6,7 +6,7 @@ import {importStudents} from '../src/data/schoolRepository';
 let env:RulesTestEnvironment;
 const projectId='demo-little-society';
 const profile=(sid:string)=>({schoolId:sid,name:'가상학생',grade:1,className:null,citizenCode:'C-demo',schoolYear:2026,status:'active',schemaVersion:1,createdAt:Timestamp.now(),updatedAt:Timestamp.now()});
-beforeAll(async()=>{env=await initializeTestEnvironment({projectId,firestore:{host:'127.0.0.1',port:8080,rules:readFileSync('firebase/firestore.rules','utf8')}})});
+beforeAll(async()=>{env=await initializeTestEnvironment({projectId,firestore:{host:'127.0.0.1',port:8082,rules:readFileSync('firebase/firestore.rules','utf8')}})});
 beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisabled(async c=>{
   const db=c.firestore();for(const sid of ['a','b']){await setDoc(doc(db,`schools/${sid}`),{schoolId:sid,schoolName:'가상학교',communityName:'작은 사회',currencyName:'별',currencySymbol:'S',timezone:'Asia/Seoul',status:'active',schemaVersion:1});
     await setDoc(doc(db,`schools/${sid}/members/teacher-${sid}`),{schoolId:sid,role:'teacher',studentId:null,status:'active'});

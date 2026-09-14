@@ -33,13 +33,16 @@ service cloud.firestore {
       allow get: if active(sid);
       allow list, create, delete: if false;
       allow update: if teacher(sid)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','incomeTaxRateBp','updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','incomeTaxRateBp','businessTaxRateBp','updatedAt'])
         && request.resource.data.schoolName is string && request.resource.data.schoolName.size() > 0 && request.resource.data.schoolName.size() <= 80
         && request.resource.data.communityName is string && request.resource.data.communityName.size() > 0 && request.resource.data.communityName.size() <= 80
         && request.resource.data.currencyName is string && request.resource.data.currencyName.size() > 0 && request.resource.data.currencyName.size() <= 20
         && request.resource.data.currencySymbol is string && request.resource.data.currencySymbol.size() <= 10
-        // Nullable: existing schools predate this field (D-56 pattern of D-33's lastJournalId==null).
-        && (request.resource.data.incomeTaxRateBp == null || (request.resource.data.incomeTaxRateBp is int && request.resource.data.incomeTaxRateBp >= 0 && request.resource.data.incomeTaxRateBp <= 2000))
+        // Nullable: existing schools predate these fields. Must use .get(key,null), not
+        // `d.field==null` — a genuinely ABSENT map key (not merely null) makes `d.field` itself
+        // throw ("Property X is undefined on object"), not evaluate to null (D-66).
+        && (request.resource.data.get('incomeTaxRateBp',null) == null || (request.resource.data.get('incomeTaxRateBp',null) is int && request.resource.data.get('incomeTaxRateBp',null) >= 0 && request.resource.data.get('incomeTaxRateBp',null) <= 2000))
+        && (request.resource.data.get('businessTaxRateBp',null) == null || (request.resource.data.get('businessTaxRateBp',null) is int && request.resource.data.get('businessTaxRateBp',null) >= 0 && request.resource.data.get('businessTaxRateBp',null) <= 2000))
         && request.resource.data.updatedAt == request.time;
       match /members/{uid} {
         allow get: if active(sid) && (request.auth.uid == uid || teacher(sid));
@@ -288,7 +291,8 @@ service cloud.firestore {
           || (j.type=='INTEREST' && teacher(sid))
           || (j.type=='LOAN' && teacher(sid))
           || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
-          || (j.type=='INCOME_TAX' && teacher(sid));
+          || (j.type=='INCOME_TAX' && teacher(sid))
+          || (j.type=='BUSINESS_TAX' && teacher(sid));
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -355,7 +359,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -574,6 +578,18 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // Business tax (§23) — same shape as incomeTaxJournalShape (teacher-session settlement,
+      // keyed by period not contractId), just debiting a business account instead of a student's.
+      function businessTaxJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','businessId','period','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','businessId','period','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.businessId.matches('^[A-Za-z0-9_-]{1,100}$') && d.period.matches('^[0-9]{4}-[0-9]{2}$')
+          && d.debitAccountId==d.businessId && d.creditAccountId=='community-fund'
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       match /journals/{journalId} {
         allow get: if teacher(sid);
         allow list: if teacher(sid) && bounded();
@@ -640,7 +656,14 @@ service cloud.firestore {
           (teacher(sid) && incomeTaxJournalShape() && request.resource.data.type=='INCOME_TAX'
             && journalId==('tax~'+request.resource.data.studentId+'~'+request.resource.data.period)
             && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.studentId)).data.status=='active'
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor);
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          ||
+          // Business tax: same trust tier as INCOME_TAX (teacher-session, amount trusted from the
+          // app-computed preview) — debits the business's own account instead of a student's.
+          (teacher(sid) && businessTaxJournalShape() && request.resource.data.type=='BUSINESS_TAX'
+            && journalId==('businessTax~'+request.resource.data.businessId+'~'+request.resource.data.period)
+            && get(businessPath(request.resource.data.businessId)).data.status=='active'
+            && get(accountPath(request.resource.data.businessId)).data.balanceMinor>=request.resource.data.amountMinor);
         allow update, delete: if false;
       }
       function financialRequestPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialRequests/$(id); }

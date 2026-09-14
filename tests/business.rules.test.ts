@@ -3,12 +3,14 @@ import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {doc,getDoc,setDoc,updateDoc,deleteDoc,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
 import {firestoreBusiness} from '../src/data/businessRepository';
+import {businessTaxJournalId} from '../src/domain/business';
+import {currentPeriod} from '../src/domain/money';
 import type {SchoolContext} from '../src/domain/model';
 let env:RulesTestEnvironment;
 const db=(uid:string)=>env.authenticatedContext(uid).firestore() as unknown as Firestore;
 const context=(role:'student'|'teacher',sid='a',studentId='one'):SchoolContext=>({schoolId:sid,uid:role==='teacher'?`teacher-${sid}`:`${sid}-${studentId}`,membership:{schoolId:sid,role,studentId:role==='student'?studentId:null,status:'active'}});
 const store=(role:'student'|'teacher',sid='a',studentId='one')=>{const c=context(role,sid,studentId);return firestoreBusiness(db(c.uid),c)};
-beforeAll(async()=>{env=await initializeTestEnvironment({projectId:'demo-little-society',firestore:{host:'127.0.0.1',port:8080,rules:readFileSync('firebase/firestore.rules','utf8')}})});
+beforeAll(async()=>{env=await initializeTestEnvironment({projectId:'demo-little-society',firestore:{host:'127.0.0.1',port:8082,rules:readFileSync('firebase/firestore.rules','utf8')}})});
 beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisabled(async c=>{
   const db=c.firestore();
   for(const sid of ['a','b']){
@@ -130,5 +132,48 @@ describe('사업 운영 학생 자기 관리(§25)',()=>{
     await assertFails(getDoc(doc(db('a-two'),`schools/a/accounts/${businessId}/entries/dummy`)));
     const stranger=store('student','a','two');
     await expect(stranger.businessEntries(businessId)).rejects.toThrow();
+  });
+});
+describe('사업 세금 정산',()=>{
+  it('매출이 있는 사업에 세율만큼 세금을 걷으면 사업 계좌에서 차감되고 공동기금이 쌓인다',async()=>{
+    const {businessId,productId}=await shopWithJuice('active','active',5,300);
+    await store('student','a','one').buy(businessId,productId);
+    const teacher=store('teacher');
+    await teacher.ensureCommunityFund();
+    const period=currentPeriod();
+    const items=await teacher.previewBusinessTax(period,500); // 5%
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({businessId,revenueMinor:300,amountMinor:15,alreadyPaid:false});
+    const result=await teacher.settleBusinessTax(items);
+    expect(result).toEqual({paid:1,skipped:0,failed:0});
+    const account=await teacher.businessAccount(businessId);
+    expect(account?.balanceMinor).toBe(285); // 300 - 15
+  });
+  it('매출이 없는 사업은 과세 대상에 없다',async()=>{
+    const {businessId}=await shopWithJuice();
+    const teacher=store('teacher');
+    await teacher.ensureCommunityFund();
+    const items=await teacher.previewBusinessTax(currentPeriod(),500);
+    expect(items.some(i=>i.businessId===businessId)).toBe(false);
+  });
+  it('같은 달에 같은 사업에게 세금을 두 번 걷지 않는다',async()=>{
+    const {businessId,productId}=await shopWithJuice();
+    await store('student','a','one').buy(businessId,productId);
+    const teacher=store('teacher');
+    await teacher.ensureCommunityFund();
+    const period=currentPeriod();
+    let items=await teacher.previewBusinessTax(period,500);
+    await teacher.settleBusinessTax(items);
+    items=await teacher.previewBusinessTax(period,500);
+    expect(items[0]?.alreadyPaid).toBe(true);
+    const result=await teacher.settleBusinessTax(items);
+    expect(result).toEqual({paid:0,skipped:1,failed:0});
+  });
+  it('학생은 사업 세금 저널을 스스로 만들 수 없다',async()=>{
+    const {businessId,productId}=await shopWithJuice();
+    await store('student','a','one').buy(businessId,productId);
+    await store('teacher').ensureCommunityFund();
+    const journalId=businessTaxJournalId(businessId,currentPeriod());
+    await assertFails(setDoc(doc(db('a-one'),`schools/a/journals/${journalId}`),{schoolId:'a',type:'BUSINESS_TAX',businessId,period:currentPeriod(),debitAccountId:businessId,creditAccountId:'community-fund',amountMinor:1,postedBy:'a-one',schemaVersion:1,createdAt:serverTimestamp()}));
   });
 });

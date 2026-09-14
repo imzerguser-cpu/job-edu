@@ -9,7 +9,7 @@ function createClient(){
   const emulator=import.meta.env.VITE_USE_EMULATORS==='true';
   if(emulator){
     if(!import.meta.env.DEV||!config.projectId.startsWith('demo-'))throw new Error('에뮬레이터는 개발용 demo 프로젝트에서만 사용합니다.');
-    connectAuthEmulator(auth,'http://127.0.0.1:9099',{disableWarnings:true});connectFirestoreEmulator(db,'127.0.0.1',8080);
+    connectAuthEmulator(auth,'http://127.0.0.1:9099',{disableWarnings:true});connectFirestoreEmulator(db,'127.0.0.1',8082);
   }
   const ready=setPersistence(auth,inMemoryPersistence);
   return {auth,db,ready};

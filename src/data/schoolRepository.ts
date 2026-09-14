@@ -2,6 +2,7 @@ import {collection,doc,getDocFromServer,getDocsFromServer,query,limit,orderBy,ru
 import type {Firestore,QueryDocumentSnapshot,DocumentData} from 'firebase/firestore';
 import {isTeacher,schoolPath,validateId,type Membership,type School,type SchoolContext,type Student} from '../domain/model';
 import {validateIncomeTaxRateBp} from '../domain/finance';
+import {validateBusinessTaxRateBp} from '../domain/business';
 import type {RosterRow} from '../domain/roster';
 export async function listSchools(db:Firestore,uid:string){
   validateId(uid);const snap=await getDocsFromServer(query(collection(db,`userSchools/${uid}/links`),limit(50)));
@@ -15,7 +16,7 @@ export async function openSchool(db:Firestore,uid:string,schoolId:string){
   if(membership.status!=='active'||membership.schoolId!==schoolId||!['student','teacher','owner'].includes(membership.role))throw new Error('학교 이용 권한이 없습니다.');
   const school=await getDocFromServer(doc(db,`schools/${schoolId}`));
   if(!school.exists()||school.data().status!=='active')throw new Error('현재 이용할 수 없는 학교입니다.');
-  return {context:{schoolId,uid,membership} satisfies SchoolContext,school:{...school.data(),incomeTaxRateBp:school.data().incomeTaxRateBp??0} as School};
+  return {context:{schoolId,uid,membership} satisfies SchoolContext,school:{...school.data(),incomeTaxRateBp:school.data().incomeTaxRateBp??0,businessTaxRateBp:school.data().businessTaxRateBp??0} as School};
 }
 export async function getCitizen(db:Firestore,context:SchoolContext){
   const id=context.membership.studentId;if(!id)throw new Error('연결된 시민 프로필이 없습니다.');
@@ -42,6 +43,11 @@ export async function updateIncomeTaxRate(db:Firestore,context:SchoolContext,rat
   if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
   validateId(context.schoolId);validateIncomeTaxRateBp(rateBp);
   await updateDoc(doc(db,`schools/${context.schoolId}`),{incomeTaxRateBp:rateBp,updatedAt:serverTimestamp()});
+}
+export async function updateBusinessTaxRate(db:Firestore,context:SchoolContext,rateBp:number){
+  if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
+  validateId(context.schoolId);validateBusinessTaxRateBp(rateBp);
+  await updateDoc(doc(db,`schools/${context.schoolId}`),{businessTaxRateBp:rateBp,updatedAt:serverTimestamp()});
 }
 export interface PlannedStudent extends RosterRow {id:string;citizenCode:string}
 export function planImport(rows:RosterRow[]):PlannedStudent[]{return rows.map(r=>{const id=crypto.randomUUID();return {...r,id,citizenCode:`C-${id}`}})}
