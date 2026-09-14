@@ -43,7 +43,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
       :view==='bank'
       ?<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>
       :view==='store'
-      ?<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName}/>
+      ?<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName} studentId={citizen.id}/>
       :<BuildingPlaceholder label={building.label}/>}
   </BuildingShell>;
 }

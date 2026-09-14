@@ -1,10 +1,11 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {formatMoney} from '../../domain/money';
 import type {Business,Catalog,Product} from '../../domain/business';
+import type {AccountEntry} from '../../domain/finance';
 import type {Student} from '../../domain/model';
 import type {BusinessStore} from '../../data/businessRepository';
 
-export function StoreWorkspace({store,teacher,students,currencySymbol='마동'}:{store:BusinessStore;teacher:boolean;students:Student[];currencySymbol?:string}){
+export function StoreWorkspace({store,teacher,students,currencySymbol='마동',studentId}:{store:BusinessStore;teacher:boolean;students:Student[];currencySymbol?:string;studentId?:string}){
   const [catalog,setCatalog]=useState<Catalog>({businesses:[],products:[]});
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [creatingBusiness,setCreatingBusiness]=useState(false);
@@ -22,6 +23,8 @@ export function StoreWorkspace({store,teacher,students,currencySymbol='마동'}:
   }
   const studentName=(id:string)=>students.find(s=>s.id===id)?.name??'현재 명단 밖의 시민';
   const productsOf=(businessId:string)=>catalog.products.filter(p=>p.businessId===businessId);
+  const isOwner=(b:Business)=>!!studentId&&b.ownerStudentId===studentId;
+  const canManage=(b:Business)=>teacher||isOwner(b);
 
   if(loading)return <p role="status">상점을 불러오고 있어요.</p>;
 
@@ -34,16 +37,16 @@ export function StoreWorkspace({store,teacher,students,currencySymbol='마동'}:
       <div className="header-actions"><button className="button primary" disabled={busy}>만들기</button><button type="button" className="button quiet" onClick={()=>setCreatingBusiness(false)}>취소</button></div>
     </form>}
     {!catalog.businesses.length?<p className="empty">{teacher?'아직 만든 사업이 없어요.':'아직 운영 중인 사업이 없어요.'}</p>:<div className="list">
-      {catalog.businesses.filter(b=>teacher||b.status==='active').map(b=><article key={b.id} className="task-row">
-        <div className="task-row-head"><b>{b.name}</b>{teacher&&<span className="badge">{studentName(b.ownerStudentId)} · {b.status==='active'?'운영 중':'종료'}</span>}</div>
-        {teacher&&<div className="header-actions"><button className="button quiet" onClick={()=>setAddingProductTo(b.id)}>+ 상품 추가</button>{b.status==='active'&&<button className="button quiet" disabled={busy} onClick={()=>run(()=>store.saveBusiness({...b,status:'closed'}),'사업을 종료했습니다.')}>사업 종료</button>}</div>}
+      {catalog.businesses.filter(b=>teacher||b.status==='active'||isOwner(b)).map(b=><article key={b.id} className="task-row">
+        <div className="task-row-head"><b>{b.name}</b>{(teacher||isOwner(b))&&<span className="badge">{teacher?`${studentName(b.ownerStudentId)} · `:'내 사업 · '}{b.status==='active'?'운영 중':'종료'}</span>}</div>
+        {canManage(b)&&<div className="header-actions"><button className="button quiet" onClick={()=>setAddingProductTo(b.id)}>+ 상품 추가</button>{teacher&&b.status==='active'&&<button className="button quiet" disabled={busy} onClick={()=>run(()=>store.saveBusiness({...b,status:'closed'}),'사업을 종료했습니다.')}>사업 종료</button>}</div>}
         {addingProductTo===b.id&&<form className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>store.saveProduct({id:crypto.randomUUID(),schoolId:'',businessId:b.id,name:String(f.get('name')).trim(),priceMinor:Math.round(Number(f.get('price'))*100),stock:Number(f.get('stock')),lastJournalId:null,status:'active',schemaVersion:1}),'상품을 추가했습니다.')}}>
           <label>상품 이름<input autoFocus name="name" required maxLength={60}/></label>
           <label>가격({currencySymbol})<input name="price" type="number" min={1} max={1000} step={1} required/></label>
           <label>재고<input name="stock" type="number" min={0} max={1000} step={1} required/></label>
           <div className="header-actions"><button className="button primary" disabled={busy}>추가</button><button type="button" className="button quiet" onClick={()=>setAddingProductTo(null)}>취소</button></div>
         </form>}
-        <div className="list">{productsOf(b.id).filter(p=>teacher||p.status==='active').map(p=>editingProduct?.id===p.id
+        <div className="list">{productsOf(b.id).filter(p=>canManage(b)||p.status==='active').map(p=>editingProduct?.id===p.id
           ?<form key={p.id} className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>store.saveProduct({...p,priceMinor:Math.round(Number(f.get('price'))*100),stock:Number(f.get('stock')),status:f.get('status') as Product['status']}),'상품을 수정했습니다.')}}>
             <label>가격({currencySymbol})<input name="price" type="number" min={1} max={1000} step={1} defaultValue={p.priceMinor/100} required/></label>
             <label>재고<input name="stock" type="number" min={0} max={1000} step={1} defaultValue={p.stock} required/></label>
@@ -51,11 +54,36 @@ export function StoreWorkspace({store,teacher,students,currencySymbol='마동'}:
             <div className="header-actions"><button className="button primary" disabled={busy}>저장</button><button type="button" className="button quiet" onClick={()=>setEditingProduct(null)}>취소</button></div>
           </form>
           :<article key={p.id} className="task-row"><div className="task-row-head"><b>{p.name}</b><span className="badge">{formatMoney(p.priceMinor,currencySymbol)}</span></div><p className="muted">재고 {p.stock} · {p.status==='active'?'판매 중':'판매 중지'}</p>
-            {teacher?<button className="button quiet" onClick={()=>setEditingProduct(p)}>수정</button>
+            {canManage(b)?<button className="button quiet" onClick={()=>setEditingProduct(p)}>수정</button>
               :<button className="button primary" disabled={busy||p.status!=='active'||p.stock<1} onClick={()=>run(()=>store.buy(b.id,p.id),`${p.name}을(를) 구매했습니다.`)}>{p.stock<1?'품절':'구매하기'}</button>}
           </article>)}
         </div>
+        {canManage(b)&&<BusinessSales store={store} businessId={b.id} currencySymbol={currencySymbol}/>}
       </article>)}
     </div>}
   </section>;
+}
+
+function BusinessSales({store,businessId,currencySymbol}:{store:BusinessStore;businessId:string;currencySymbol:string}){
+  const [open,setOpen]=useState(false);
+  const [balance,setBalance]=useState<number|null>(null);
+  const [entries,setEntries]=useState<AccountEntry[]>([]);
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  async function toggle(){
+    if(open){setOpen(false);return}
+    setBusy(true);setError('');
+    try{
+      const [account,list]=await Promise.all([store.businessAccount(businessId),store.businessEntries(businessId)]);
+      setBalance(account?.balanceMinor??0);setEntries(list);setOpen(true);
+    }catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  return <div className="section">
+    <button className="button quiet" disabled={busy} onClick={toggle}>{open?'매출 숨기기':'매출 보기'}</button>
+    {error&&<p role="alert" className="error">{error}</p>}
+    {open&&<>
+      <p className="muted">사업 계좌 잔액 {formatMoney(balance??0,currencySymbol)}</p>
+      {!entries.length?<p className="empty">아직 거래 내역이 없어요.</p>:<div className="list">{entries.map(e=><article key={e.id} className="task-row"><div className="task-row-head"><b>{e.label}</b><span className="badge">{e.deltaMinor>=0?'+':''}{formatMoney(e.deltaMinor,currencySymbol)}</span></div></article>)}</div>}
+    </>}
+  </div>;
 }

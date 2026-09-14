@@ -351,8 +351,8 @@ service cloud.firestore {
           && (creditedHere() || debitedHere());
         allow delete: if false;
         match /entries/{entryId} {
-          allow get: if teacher(sid) || ownStudent(sid,accountId);
-          allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId));
+          allow get: if teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId);
+          allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX']
@@ -370,6 +370,10 @@ service cloud.firestore {
       }
       function businessPath(id) { return /databases/$(database)/documents/schools/$(sid)/businesses/$(id); }
       function productPath(id) { return /databases/$(database)/documents/schools/$(sid)/products/$(id); }
+      // The student assigned as a business's owner (§25) may manage its own products and see its
+      // own sales history — this is authorization, so it checks the trusted businesses/{id} doc's
+      // ownerStudentId, never a client-supplied value.
+      function ownBusiness(businessId) { return activeStudent(sid) && get(businessPath(businessId)).data.ownerStudentId==callerStudentId(sid); }
       function businessShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','name','ownerStudentId','status','schemaVersion','createdAt','updatedAt'])
@@ -408,14 +412,15 @@ service cloud.firestore {
       match /products/{productId} {
         allow get: if active(sid);
         allow list: if active(sid) && bounded();
-        allow create: if teacher(sid) && productShape() && request.resource.data.lastJournalId==null
+        allow create: if (teacher(sid) || ownBusiness(request.resource.data.businessId)) && productShape() && request.resource.data.lastJournalId==null
           && request.resource.data.createdAt==request.time && exists(businessPath(request.resource.data.businessId));
-        // A teacher may edit name/price/stock/status directly (lastJournalId untouched). A
-        // student may only decrement stock by exactly 1, tied to a PURCHASE journal created in
-        // the same transaction that names this product — never price, name, or status.
+        // A teacher, or the student who owns this product's business (§25), may edit
+        // name/price/stock/status directly (lastJournalId untouched). Any other student may only
+        // decrement stock by exactly 1, tied to a PURCHASE journal created in the same
+        // transaction that names this product — never price, name, or status.
         allow update: if productShape() && request.resource.data.businessId==resource.data.businessId && request.resource.data.createdAt==resource.data.createdAt
           && (
-            (teacher(sid) && request.resource.data.lastJournalId==resource.data.lastJournalId)
+            ((teacher(sid) || ownBusiness(resource.data.businessId)) && request.resource.data.lastJournalId==resource.data.lastJournalId)
             ||
             (activeStudent(sid)
               && request.resource.data.lastJournalId!=null && request.resource.data.lastJournalId!=resource.data.lastJournalId

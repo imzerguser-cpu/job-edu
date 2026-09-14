@@ -94,3 +94,41 @@ describe('구매',()=>{
     await assertFails(deleteDoc(doc(db('teacher-a'),'schools/a/businesses/'+businessId)));
   });
 });
+describe('사업 운영 학생 자기 관리(§25)',()=>{
+  it('사업을 소유한 학생은 자기 상품을 직접 추가·수정할 수 있다',async()=>{
+    const {businessId}=await shopWithJuice();
+    const owner=store('student','a','one'); // shopWithJuice's owner is "one"
+    await owner.saveProduct({id:crypto.randomUUID(),schoolId:'a',businessId,name:'새우깡',priceMinor:200,stock:10,lastJournalId:null,status:'active',schemaVersion:1});
+    let catalog=await owner.loadCatalog();
+    const newProduct=catalog.products.find(p=>p.name==='새우깡');
+    expect(newProduct).toBeTruthy();
+    await owner.saveProduct({...newProduct!,priceMinor:250,stock:5,status:'paused'});
+    catalog=await store('teacher').loadCatalog();
+    expect(catalog.products.find(p=>p.id===newProduct!.id)).toMatchObject({priceMinor:250,stock:5,status:'paused'});
+  });
+  it('사업을 소유하지 않은 학생은 남의 상품을 추가·수정할 수 없다',async()=>{
+    const {businessId,productId}=await shopWithJuice();
+    const stranger=store('student','a','two');
+    await expect(stranger.saveProduct({id:crypto.randomUUID(),schoolId:'a',businessId,name:'무단상품',priceMinor:100,stock:1,lastJournalId:null,status:'active',schemaVersion:1})).rejects.toThrow();
+    const catalog=await store('teacher').loadCatalog();
+    const product=catalog.products.find(p=>p.id===productId)!;
+    await expect(stranger.saveProduct({...product,priceMinor:1})).rejects.toThrow();
+  });
+  it('사업을 소유한 학생은 자기 사업의 매출(계좌·거래 내역)을 볼 수 있다',async()=>{
+    const {businessId,productId}=await shopWithJuice();
+    await store('student','a','one').buy(businessId,productId);
+    const owner=store('student','a','one');
+    const account=await owner.businessAccount(businessId);
+    expect(account?.balanceMinor).toBe(300);
+    const entries=await owner.businessEntries(businessId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({deltaMinor:300,balanceAfterMinor:300});
+  });
+  it('사업을 소유하지 않은 학생은 남의 사업 거래 내역을 볼 수 없다',async()=>{
+    const {businessId,productId}=await shopWithJuice();
+    await store('student','a','one').buy(businessId,productId);
+    await assertFails(getDoc(doc(db('a-two'),`schools/a/accounts/${businessId}/entries/dummy`)));
+    const stranger=store('student','a','two');
+    await expect(stranger.businessEntries(businessId)).rejects.toThrow();
+  });
+});

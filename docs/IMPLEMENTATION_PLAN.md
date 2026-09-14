@@ -336,3 +336,9 @@ RULE/EVENT/COMMUNITY 제안 종류, 초안(draft) 저장, 시민 의견(댓글)�
 핵심 설계 결정: 소득세는 **잔액(재산)이 아니라 그 정산월에 실제로 지급된 SALARY 저널의 합**을 과세 대상으로 삼는다 — "소득"세라는 이름 그대로이며, 학생이 여러 직업을 겸해도 정확히 과세된다. 이를 위해 `previewIncomeTax`는 이미 100건 한도로 자유롭게 읽어 온 SALARY 저널을 학생별로 합산해 재사용하며, `settleSalary`(이미 배포되어 실사용 중인 코드)는 전혀 건드리지 않는다 — 소득세는 월급 지급과 완전히 분리된, 그 뒤에 이어지는 별도 교사 세션 정산(미리보기→확정)이다. 세율은 학교 문서의 `incomeTaxRateBp`(0~20%, 교사만 설정) 필드에 저장하며, 걷은 세금은 새 시스템 계좌 `community-fund`(§17의 `system-issuer`와 같은 성격의 학교 전체 공유 계좌)로 들어간다. 원장 형태는 `SAVINGS_DEPOSIT`/`LOAN_REPAYMENT`가 쓰는 `studentToIssuerJournalShape`를 재사용하지 않고 `incomeTaxJournalShape`를 새로 만들었다 — 세금은 계약(contractId)이 아니라 SALARY처럼 정산월(period)에 묶이는 값이라 모양이 다르기 때문이다(D-17의 "성급한 일반화 금지" 원칙을 그대로 따름).
 
 기존 학교 문서에는 `incomeTaxRateBp` 필드가 아예 없으므로(과거 배포분), Rules는 이 필드를 `null`도 허용하고(D-33의 `lastJournalId==null` 패턴과 동일), 읽는 쪽(`schoolRepository.openSchool`)은 없으면 0으로 취급한다 — 필드 하나 추가를 위해 기존 학교를 backfill할 필요가 없다. 자세한 근거는 `docs/DECISIONS.md` D-59~D-62.
+
+## 24. 사업 운영 학생 자기 관리 1차 구현 — D-25가 남겨둔 매출 열람·상품 관리 (신규)
+
+2026-09-14: §25가 요구한 "사업자, 직원, 상품, 가격, 매출, 비용, 순이익, 사업계좌, 세금 등을 관리한다" 중 소유 학생이 **이미 만들어진 자기 사업**의 상품을 추가·수정하고 매출(계좌 잔액 + 거래 내역)을 보는 부분을 연결했다. 사업 생성·종료는 여전히 교사 전용이다(D-63).
+
+새 Rules 헬퍼 `ownBusiness(businessId)`가 `businesses/{businessId}.ownerStudentId`를 신뢰된 소스로 조회해 판정한다(D-64). `products`의 create/update와 `accounts/{accountId}/entries`(사업 계좌의 거래 내역)의 get/list 양쪽에 이 헬퍼를 추가했다 — 새 저널 타입이나 계좌 구조 변경은 전혀 없고, 순수하게 기존 데이터에 대한 접근 범위만 넓혔다(§23/§24 같은 금융 흐름 변경보다 낮은 위험). 클라이언트 쪽 `businessRepository.saveProduct()`에서 하드코딩된 `teacher()` 가드를 제거하고 `buy()`가 이미 쓰던 것과 같은 신뢰 패턴(권한 판단을 전부 Rules에 맡기고, 거부되면 에러로 받는다)으로 바꿨다. 근거와 이 과정에서 확인한 재사용 가능한 교훈(기존 "학생은 상품을 직접 못 바꾼다" 테스트가 실은 소유권이 아니라 `updatedAt` 누락을 검증하고 있었다는 점)은 `docs/DECISIONS.md` D-63~D-65.

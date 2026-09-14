@@ -1,14 +1,17 @@
-import {collection,doc,getDocsFromServer,limit,query,runTransaction,serverTimestamp} from 'firebase/firestore';
+import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,runTransaction,serverTimestamp} from 'firebase/firestore';
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant} from '../domain/jobs';
 import {validateBusiness,validateProduct,type Business,type Catalog,type Product} from '../domain/business';
+import type {Account,AccountEntry} from '../domain/finance';
 export interface BusinessStore {
   loadCatalog():Promise<Catalog>;
   createBusiness(name:string,ownerStudentId:string):Promise<void>;
   saveBusiness(b:Business):Promise<void>;
   saveProduct(p:Product):Promise<void>;
   buy(businessId:string,productId:string):Promise<void>;
+  businessAccount(businessId:string):Promise<Account|null>;
+  businessEntries(businessId:string):Promise<AccountEntry[]>;
 }
 export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -46,8 +49,10 @@ export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessSt
         tx.update(ref('businesses',id),{...data,updatedAt:serverTimestamp()});
       });
     },
+    // Teacher, or the student who owns this product's business (§25) — enforced by Rules
+    // (ownBusiness), not pre-checked here, the same trust pattern buy() already uses below.
     async saveProduct(p){
-      teacher();validateProduct(p);
+      validateProduct(p);
       await runTransaction(db,async tx=>{
         const [business,old]=await Promise.all([tx.get(ref('businesses',p.businessId)),tx.get(ref('products',p.id))]);
         if(!business.exists())throw new Error('사업을 먼저 만들어 주세요.');
@@ -77,6 +82,17 @@ export function firestoreBusiness(db:Firestore,context:SchoolContext):BusinessSt
         tx.set(doc(collection(businessAccountRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'PURCHASE',deltaMinor:price,balanceAfterMinor:businessAfter,label:'판매: '+product.data().name,postedAt:serverTimestamp()});
         tx.update(productRef,{stock:product.data().stock-1,lastJournalId:journalId,updatedAt:serverTimestamp()});
       });
+    },
+    // Business account balance is already open to any active member (D-25 — it's shared/school
+    // information like the issuer account, not private student data). Entries (sale-by-sale
+    // history) are restricted to the teacher and the business's own owner (ownBusiness in Rules).
+    async businessAccount(businessId){
+      const snap=await getDocFromServer(ref('accounts',businessId));
+      return snap.exists()?({...snap.data(),id:snap.id} as Account):null;
+    },
+    async businessEntries(businessId){
+      const snap=await getDocsFromServer(query(collection(ref('accounts',businessId),'entries'),orderBy('postedAt','desc'),limit(20)));
+      return snap.docs.map(d=>({...d.data(),id:d.id} as AccountEntry));
     },
   };
 }
