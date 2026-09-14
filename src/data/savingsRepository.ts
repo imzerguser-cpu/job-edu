@@ -2,17 +2,14 @@ import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,ru
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant} from '../domain/jobs';
-import {ISSUER_ACCOUNT_ID} from '../domain/finance';
+import {ISSUER_ACCOUNT_ID,validAmount,validMonths,type FinancialProduct} from '../domain/finance';
 import {simpleInterest,addCalendarMonths} from '../domain/money';
 import {
-  savingsDepositJournalId,savingsInterestJournalId,validSavingsAmount,validSavingsMonths,validateSavingsProduct,
-  type SavingsContract,type SavingsMaturityPreviewItem,type SavingsProduct,
+  savingsDepositJournalId,savingsInterestJournalId,
+  type SavingsContract,type SavingsMaturityPreviewItem,
 } from '../domain/savings';
 
 export interface SavingsStore {
-  listProducts():Promise<SavingsProduct[]>;
-  createProduct(input:Omit<SavingsProduct,'id'|'schoolId'|'kind'|'schemaVersion'>):Promise<void>;
-  closeProduct(id:string):Promise<void>;
   myContracts():Promise<SavingsContract[]>;
   openSavings(input:{productId:string;principalMinor:number;months:number}):Promise<void>;
   previewMaturities():Promise<SavingsMaturityPreviewItem[]>;
@@ -23,26 +20,6 @@ export function firestoreSavings(db:Firestore,context:SchoolContext):SavingsStor
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
   const teacher=()=>{if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.')};
   return {
-    async listProducts(){
-      const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'financialProducts')),limit(100)));
-      return snap.docs.map(d=>({...d.data(),id:d.id} as SavingsProduct));
-    },
-    async createProduct(input){
-      teacher();
-      const product={kind:'savings' as const,...input};
-      validateSavingsProduct(product);
-      await runTransaction(db,async tx=>{
-        tx.set(ref('financialProducts',crypto.randomUUID()),{schoolId:context.schoolId,...product,schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
-      });
-    },
-    async closeProduct(id){
-      teacher();
-      await runTransaction(db,async tx=>{
-        const old=await tx.get(ref('financialProducts',id));
-        if(!old.exists())throw new Error('상품을 찾을 수 없습니다.');
-        tx.update(ref('financialProducts',id),{status:'closed',updatedAt:serverTimestamp()});
-      });
-    },
     async myContracts(){
       const studentId=assertApplicant(context);
       const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'savings')),where('studentId','==',studentId),limit(100)));
@@ -52,21 +29,25 @@ export function firestoreSavings(db:Firestore,context:SchoolContext):SavingsStor
       const studentId=assertApplicant(context);
       const productSnap=await getDocFromServer(ref('financialProducts',productId));
       if(!productSnap.exists()||productSnap.data().status!=='active')throw new Error('가입할 수 있는 상품이 아닙니다.');
-      const product={...productSnap.data(),id:productSnap.id} as SavingsProduct;
-      if(!validSavingsAmount(product,principalMinor))throw new Error('가입 금액이 상품 범위를 벗어났습니다.');
-      if(!validSavingsMonths(product,months))throw new Error('가입 기간이 상품 범위를 벗어났습니다.');
+      const product={...productSnap.data(),id:productSnap.id} as FinancialProduct;
+      if(!validAmount(product,principalMinor))throw new Error('가입 금액이 상품 범위를 벗어났습니다.');
+      if(!validMonths(product,months))throw new Error('가입 기간이 상품 범위를 벗어났습니다.');
       const contractId=crypto.randomUUID();
       const depositJournalId=savingsDepositJournalId(contractId);
       const startAt=new Date().toISOString().slice(0,10);
       const maturityAt=addCalendarMonths(startAt,months);
       await runTransaction(db,async tx=>{
-        const studentRef=ref('accounts',studentId);
-        const student=await tx.get(studentRef);
+        const studentRef=ref('accounts',studentId),issuerRef=ref('accounts',ISSUER_ACCOUNT_ID);
+        const [student,issuer]=await Promise.all([tx.get(studentRef),tx.get(issuerRef)]);
         if(!student.exists()||student.data().balanceMinor<principalMinor)throw new Error('마동이 부족합니다.');
+        if(!issuer.exists())throw new Error('발행 계좌가 준비되지 않았습니다. 먼저 계좌를 준비해 주세요.');
         tx.set(ref('journals',depositJournalId),{schoolId:context.schoolId,type:'SAVINGS_DEPOSIT',studentId,contractId,debitAccountId:studentId,creditAccountId:ISSUER_ACCOUNT_ID,amountMinor:principalMinor,postedBy:studentId,schemaVersion:1,createdAt:serverTimestamp()});
         const studentAfter=student.data().balanceMinor-principalMinor;
         tx.update(studentRef,{balanceMinor:studentAfter,version:student.data().version+1,lastJournalId:depositJournalId,updatedAt:serverTimestamp()});
         tx.set(doc(collection(studentRef,'entries'),depositJournalId),{schoolId:context.schoolId,journalId:depositJournalId,type:'SAVINGS_DEPOSIT',deltaMinor:-principalMinor,balanceAfterMinor:studentAfter,label:`저축 가입 · ${product.name}`,postedAt:serverTimestamp()});
+        const issuerAfter=issuer.data().balanceMinor+principalMinor;
+        tx.update(issuerRef,{balanceMinor:issuerAfter,version:issuer.data().version+1,lastJournalId:depositJournalId,updatedAt:serverTimestamp()});
+        tx.set(doc(collection(issuerRef,'entries'),depositJournalId),{schoolId:context.schoolId,journalId:depositJournalId,type:'SAVINGS_DEPOSIT',deltaMinor:principalMinor,balanceAfterMinor:issuerAfter,label:`저축 수납 · ${product.name}`,postedAt:serverTimestamp()});
         tx.set(ref('savings',contractId),{
           schoolId:context.schoolId,studentId,productId,
           productSnapshot:{name:product.name,rateBpsMonthly:product.rateBpsMonthly},

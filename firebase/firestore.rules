@@ -283,7 +283,9 @@ service cloud.firestore {
         return (j.type=='SALARY' && teacher(sid))
           || (j.type=='PURCHASE' && activeStudent(sid) && callerStudentId(sid)==j.buyerStudentId)
           || (j.type=='SAVINGS_DEPOSIT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
-          || (j.type=='INTEREST' && teacher(sid));
+          || (j.type=='INTEREST' && teacher(sid))
+          || (j.type=='LOAN' && teacher(sid))
+          || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId);
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -308,7 +310,11 @@ service cloud.firestore {
         // Business accounts are also readable by any active member (not just the owner/teacher):
         // a buyer's purchase transaction must read the seller's current balance to credit it,
         // and a store till isn't the sensitive peer-to-peer information §6 asks to keep private.
-        allow get: if teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId));
+        // The system-issuer account is the same kind of non-sensitive shared information (the
+        // school's total printed-minus-collected balance, not any individual's data) — a student
+        // depositing into savings or repaying a loan must read its current balance in the same
+        // transaction to credit/debit it correctly (see openSavings/repay in the data layer).
+        allow get: if teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId)) || accountId=='system-issuer';
         allow list: if teacher(sid) && bounded();
         // Only ever created by a teacher: the system issuer (once), a student account (lazily,
         // on first salary payment), or a business account (alongside the business itself).
@@ -343,7 +349,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -421,7 +427,7 @@ service cloud.firestore {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','kind','name','rateBpsMonthly','minMonths','maxMonths','minMinor','maxMinor','status','schemaVersion','createdAt','updatedAt'])
           && d.keys().hasOnly(['schoolId','kind','name','rateBpsMonthly','minMonths','maxMonths','minMinor','maxMinor','status','schemaVersion','createdAt','updatedAt'])
-          && d.schoolId==sid && d.schemaVersion==1 && d.kind=='savings'
+          && d.schoolId==sid && d.schemaVersion==1 && d.kind in ['savings','loan']
           && d.name is string && d.name.size()>0 && d.name.size()<=60
           && d.rateBpsMonthly is int && d.rateBpsMonthly>=0 && d.rateBpsMonthly<=10000
           && d.minMonths is int && d.maxMonths is int && d.minMonths>=1 && d.maxMonths<=120 && d.minMonths<=d.maxMonths
@@ -519,7 +525,12 @@ service cloud.firestore {
           && d.postedBy==d.buyerStudentId
           && d.createdAt==request.time;
       }
-      function savingsDepositJournalShape() {
+      // Shared by any journal that moves money between one student and the system-issuer with
+      // only {studentId,contractId} as identifying context — SAVINGS_DEPOSIT and LOAN_REPAYMENT
+      // (student pays in) both use studentToIssuerJournalShape; INTEREST and LOAN (issuer pays
+      // out) both use issuerToStudentJournalShape. The caller still pins down the exact `type`
+      // and which side is debit/credit via journalActorOk() and the per-type create clause below.
+      function studentToIssuerJournalShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
           && d.keys().hasOnly(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
@@ -529,7 +540,7 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000000
           && d.postedBy==d.studentId && d.createdAt==request.time;
       }
-      function interestJournalShape() {
+      function issuerToStudentJournalShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
           && d.keys().hasOnly(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
@@ -567,16 +578,195 @@ service cloud.firestore {
             && get(productPath(request.resource.data.productId)).data.priceMinor==request.resource.data.amountMinor
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.buyerStudentId)).data.balanceMinor>=request.resource.data.amountMinor)
           ||
-          (savingsDepositJournalShape() && request.resource.data.type=='SAVINGS_DEPOSIT'
+          (studentToIssuerJournalShape() && request.resource.data.type=='SAVINGS_DEPOSIT'
             && activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
             && journalId==('savingsDeposit~'+request.resource.data.contractId)
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
           ||
-          (teacher(sid) && interestJournalShape() && request.resource.data.type=='INTEREST'
+          (teacher(sid) && issuerToStudentJournalShape() && request.resource.data.type=='INTEREST'
             && journalId==('interest~'+request.resource.data.contractId)
             && get(savingsPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
-            && get(savingsPath(request.resource.data.contractId)).data.status=='active');
+            && get(savingsPath(request.resource.data.contractId)).data.status=='active')
+          ||
+          // Loan disbursement: only as part of approving the matching financialRequests/{contractId}
+          // (still 'reviewed' pre-transaction here, since the request's own update to 'approved'
+          // happens in the same transaction) — amount must equal exactly what was requested.
+          (teacher(sid) && issuerToStudentJournalShape() && request.resource.data.type=='LOAN'
+            && journalId==('loan~'+request.resource.data.contractId)
+            && get(financialRequestPath(request.resource.data.contractId)).data.status=='reviewed'
+            && get(financialRequestPath(request.resource.data.contractId)).data.operation=='LOAN'
+            && get(financialRequestPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
+            && get(financialRequestPath(request.resource.data.contractId)).data.principalMinor==request.resource.data.amountMinor)
+          ||
+          // Loan repayment: self-service full payoff, same trust tier as SAVINGS_DEPOSIT/PURCHASE —
+          // amount must equal exactly the contract's outstanding total, not a client-chosen figure.
+          (studentToIssuerJournalShape() && request.resource.data.type=='LOAN_REPAYMENT'
+            && activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
+            && journalId==('loanRepayment~'+request.resource.data.contractId)
+            && get(loanPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
+            && get(loanPath(request.resource.data.contractId)).data.status=='active'
+            && get(loanPath(request.resource.data.contractId)).data.totalOwedMinor==request.resource.data.amountMinor
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor);
         allow update, delete: if false;
+      }
+      function financialRequestPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialRequests/$(id); }
+      function financeReviewPath(id) { return /databases/$(database)/documents/schools/$(sid)/financeReviews/$(id); }
+      function loanPath(id) { return /databases/$(database)/documents/schools/$(sid)/loans/$(id); }
+      function financialRequestShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','studentId','operation','productId','principalMinor','months','purpose','repaymentPlan','status','assignedStudentId','reviewNote','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','operation','productId','principalMinor','months','purpose','repaymentPlan','status','assignedStudentId','reviewNote','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.operation=='LOAN'
+          && d.productId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.principalMinor is int && d.principalMinor>=0
+          && d.months is int && d.months>=1 && d.months<=120
+          && d.purpose is string && d.purpose.size()>0 && d.purpose.size()<=500
+          && d.repaymentPlan is string && d.repaymentPlan.size()>0 && d.repaymentPlan.size()<=500
+          && d.status in ['submitted','assigned','reviewed','approved','rejected']
+          && (d.assignedStudentId==null || d.assignedStudentId is string)
+          && d.reviewNote is string && d.reviewNote.size()<=500
+          && d.decisionNote is string && d.decisionNote.size()<=500
+          && (d.reviewerUid==null || d.reviewerUid is string)
+          && (d.createdEntityId==null || d.createdEntityId is string)
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      function financialRequestUnchangedCore() {
+        return request.resource.data.studentId==resource.data.studentId
+          && request.resource.data.operation==resource.data.operation
+          && request.resource.data.productId==resource.data.productId
+          && request.resource.data.principalMinor==resource.data.principalMinor
+          && request.resource.data.months==resource.data.months
+          && request.resource.data.purpose==resource.data.purpose
+          && request.resource.data.repaymentPlan==resource.data.repaymentPlan
+          && request.resource.data.createdAt==resource.data.createdAt;
+      }
+      // Status machine mirrors proposals (submitted->voting->closed->approved/rejected): a
+      // student submits, and every forward transition is teacher- or assigned-reviewer-gated.
+      // submitted -> assigned (teacher picks a reviewer, any active student — not required to
+      // hold a "banker" job; see docs/DECISIONS.md D-52) -> reviewed (the assigned reviewer
+      // submits a financeReviews checklist, tied via getAfter — D-26 pattern) -> approved (teacher,
+      // disburses via the LOAN journal clause above) / rejected (teacher, from any pre-decision
+      // state, so an obviously invalid request doesn't have to wait for a wasted review).
+      match /financialRequests/{requestId} {
+        allow get: if teacher(sid) || ownStudent(sid,resource.data.studentId) || (activeStudent(sid) && callerStudentId(sid)==resource.data.assignedStudentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.studentId) || (activeStudent(sid) && callerStudentId(sid)==resource.data.assignedStudentId));
+        allow create: if ownStudent(sid,request.resource.data.studentId) && financialRequestShape()
+          && request.resource.data.status=='submitted' && request.resource.data.assignedStudentId==null
+          && request.resource.data.reviewNote=='' && request.resource.data.decisionNote==''
+          && request.resource.data.reviewerUid==null && request.resource.data.createdEntityId==null
+          && request.resource.data.createdAt==request.time
+          && get(financialProductPath(request.resource.data.productId)).data.status=='active'
+          && get(financialProductPath(request.resource.data.productId)).data.kind=='loan'
+          && request.resource.data.principalMinor>=get(financialProductPath(request.resource.data.productId)).data.minMinor
+          && request.resource.data.principalMinor<=get(financialProductPath(request.resource.data.productId)).data.maxMinor
+          && request.resource.data.months>=get(financialProductPath(request.resource.data.productId)).data.minMonths
+          && request.resource.data.months<=get(financialProductPath(request.resource.data.productId)).data.maxMonths;
+        allow update: if financialRequestShape() && financialRequestUnchangedCore()
+          && (
+            (teacher(sid) && resource.data.status=='submitted' && request.resource.data.status=='assigned'
+              && request.resource.data.assignedStudentId is string
+              && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.assignedStudentId)).data.status=='active'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','assignedStudentId','updatedAt']))
+            ||
+            (activeStudent(sid) && callerStudentId(sid)==resource.data.assignedStudentId
+              && resource.data.status=='assigned' && request.resource.data.status=='reviewed'
+              && request.resource.data.assignedStudentId==resource.data.assignedStudentId
+              && getAfter(financeReviewPath(requestId)).data.assignedStudentId==callerStudentId(sid)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewNote','updatedAt']))
+            ||
+            (teacher(sid) && resource.data.status in ['submitted','assigned','reviewed'] && request.resource.data.status=='rejected'
+              && request.resource.data.decisionNote.size()>0 && request.resource.data.reviewerUid==request.auth.uid
+              && request.resource.data.createdEntityId==null
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','decisionNote','reviewerUid','createdEntityId','updatedAt']))
+            ||
+            (teacher(sid) && resource.data.status=='reviewed' && request.resource.data.status=='approved'
+              && request.resource.data.reviewerUid==request.auth.uid
+              && request.resource.data.createdEntityId==requestId
+              && getAfter(loanPath(requestId)).data.studentId==resource.data.studentId
+              && getAfter(journalPath('loan~'+requestId)).data.type=='LOAN'
+              && getAfter(journalPath('loan~'+requestId)).data.amountMinor==resource.data.principalMinor
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','decisionNote','reviewerUid','createdEntityId','updatedAt']))
+          );
+        allow delete: if false;
+      }
+      function financeReviewShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','requestId','assignedStudentId','checklist','note','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','requestId','assignedStudentId','checklist','note','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.requestId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.assignedStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.checklist.keys().hasOnly(['studentActiveConfirmed','amountReasonable','noDuplicateLoan'])
+          && d.checklist.studentActiveConfirmed is bool && d.checklist.amountReasonable is bool && d.checklist.noDuplicateLoan is bool
+          && d.note is string && d.note.size()<=500
+          && d.createdAt==request.time;
+      }
+      // One checklist per request (doc id == requestId), visible only to the teacher and the
+      // reviewer themself — the applicant sees only the final decisionNote on their own request,
+      // matching §6's minimum-exposure principle for financial information.
+      match /financeReviews/{requestId} {
+        allow get: if teacher(sid) || (activeStudent(sid) && callerStudentId(sid)==resource.data.assignedStudentId);
+        allow list: if bounded() && (teacher(sid) || (activeStudent(sid) && callerStudentId(sid)==resource.data.assignedStudentId));
+        allow create: if activeStudent(sid) && callerStudentId(sid)==request.resource.data.assignedStudentId
+          && requestId==request.resource.data.requestId && financeReviewShape()
+          && get(financialRequestPath(requestId)).data.status=='assigned'
+          && get(financialRequestPath(requestId)).data.assignedStudentId==callerStudentId(sid);
+        allow update, delete: if false;
+      }
+      function loanShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','studentId','productId','productSnapshot','principalMinor','months','interestMinor','totalOwedMinor','repaidMinor','status','disbursementJournalId','repaymentJournalId','startAt','dueAt','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','productId','productSnapshot','principalMinor','months','interestMinor','totalOwedMinor','repaidMinor','status','disbursementJournalId','repaymentJournalId','startAt','dueAt','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.productId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.productSnapshot.keys().hasOnly(['name','rateBpsMonthly'])
+          && d.productSnapshot.name is string && d.productSnapshot.rateBpsMonthly is int
+          && d.principalMinor is int && d.principalMinor>=0
+          && d.months is int && d.months>=1 && d.months<=120
+          && d.interestMinor is int && d.interestMinor>=0
+          && d.totalOwedMinor is int && d.totalOwedMinor==d.principalMinor+d.interestMinor
+          && d.repaidMinor is int && d.repaidMinor>=0
+          && d.status in ['active','repaid']
+          && d.disbursementJournalId is string
+          && (d.repaymentJournalId==null || d.repaymentJournalId is string)
+          && d.startAt is string && d.dueAt is string
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      // Doc id == the approved financialRequests id, so a loan contract is always the unique
+      // product of exactly one approval (D-30-style deterministic id, re-used here).
+      match /loans/{contractId} {
+        allow get: if teacher(sid) || ownStudent(sid,resource.data.studentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.studentId));
+        allow create: if teacher(sid) && contractId.matches('^[A-Za-z0-9_-]{1,100}$') && loanShape()
+          && request.resource.data.status=='active' && request.resource.data.repaidMinor==0 && request.resource.data.repaymentJournalId==null
+          && request.resource.data.createdAt==request.time
+          && request.resource.data.disbursementJournalId==('loan~'+contractId)
+          && getAfter(journalPath(request.resource.data.disbursementJournalId)).data.type=='LOAN'
+          && getAfter(journalPath(request.resource.data.disbursementJournalId)).data.studentId==request.resource.data.studentId
+          && getAfter(journalPath(request.resource.data.disbursementJournalId)).data.amountMinor==request.resource.data.principalMinor
+          && get(financialRequestPath(contractId)).data.status=='reviewed'
+          && get(financialRequestPath(contractId)).data.studentId==request.resource.data.studentId
+          && get(financialRequestPath(contractId)).data.productId==request.resource.data.productId;
+        // Repayment: the owning student only, active->repaid once, full payoff only (no partial
+        // repayment yet — docs/DECISIONS.md D-52), tied to a LOAN_REPAYMENT journal in the same tx.
+        allow update: if ownStudent(sid,resource.data.studentId) && loanShape()
+          && request.resource.data.studentId==resource.data.studentId && request.resource.data.productId==resource.data.productId
+          && request.resource.data.productSnapshot==resource.data.productSnapshot
+          && request.resource.data.principalMinor==resource.data.principalMinor && request.resource.data.months==resource.data.months
+          && request.resource.data.interestMinor==resource.data.interestMinor && request.resource.data.totalOwedMinor==resource.data.totalOwedMinor
+          && request.resource.data.disbursementJournalId==resource.data.disbursementJournalId
+          && request.resource.data.startAt==resource.data.startAt && request.resource.data.dueAt==resource.data.dueAt
+          && request.resource.data.createdAt==resource.data.createdAt
+          && resource.data.status=='active' && request.resource.data.status=='repaid'
+          && request.resource.data.repaidMinor==request.resource.data.totalOwedMinor
+          && request.resource.data.repaymentJournalId==('loanRepayment~'+contractId)
+          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.type=='LOAN_REPAYMENT'
+          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.amountMinor==request.resource.data.totalOwedMinor
+          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.debitAccountId==resource.data.studentId
+          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.creditAccountId=='system-issuer';
+        allow delete: if false;
       }
       function jobFieldsShape(f) {
         return f.keys().hasAll(['title','purpose','tasks','beneficiary','suggestedSalaryMinor','tools','reason'])

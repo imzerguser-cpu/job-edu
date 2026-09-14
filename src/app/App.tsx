@@ -10,6 +10,8 @@ import {firestoreCareers} from '../data/careerRepository';
 import {firestoreTasks} from '../data/taskRepository';
 import {firestoreFinance} from '../data/financeRepository';
 import {firestoreSavings} from '../data/savingsRepository';
+import {firestoreLoans} from '../data/loanRepository';
+import {firestoreFinancialProducts} from '../data/financialProductRepository';
 import {firestoreBusiness} from '../data/businessRepository';
 import {firestoreProposals} from '../data/proposalRepository';
 import {firestoreAudit} from '../data/auditRepository';
@@ -94,6 +96,8 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
   const taskStore=useMemo(()=>firestoreTasks(firebase!.db,context),[context]);
   const financeStore=useMemo(()=>firestoreFinance(firebase!.db,context),[context]);
   const savingsStore=useMemo(()=>firestoreSavings(firebase!.db,context),[context]);
+  const loanStore=useMemo(()=>firestoreLoans(firebase!.db,context),[context]);
+  const productStore=useMemo(()=>firestoreFinancialProducts(firebase!.db,context),[context]);
   const businessStore=useMemo(()=>firestoreBusiness(firebase!.db,context),[context]);
   const proposalStore=useMemo(()=>firestoreProposals(firebase!.db,context),[context]);
   const auditStore=useMemo(()=>firestoreAudit(firebase!.db,context),[context]);
@@ -111,7 +115,7 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
   useEffect(()=>{let alive=true;setLoading(true);setStudents([]);setCitizen(null);setError('');const client=firebase!;
     (teacher?listStudents(client.db,context).then(s=>{if(alive)setStudents(s)}):getCitizen(client.db,context).then(s=>{if(alive)setCitizen(s)})).catch(e=>{if(alive)setError(readableError(e))}).finally(()=>{if(alive)setLoading(false)});return()=>{alive=false};
   },[context,teacher,refresh]);
-  if(!teacher)return <>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:citizen?<StudentHome citizen={citizen} school={school} context={context} store={store} taskStore={taskStore} financeStore={financeStore} savingsStore={savingsStore} businessStore={businessStore} proposalStore={proposalStore}/>:null}</>;
+  if(!teacher)return <>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:citizen?<StudentHome citizen={citizen} school={school} context={context} store={store} taskStore={taskStore} financeStore={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} businessStore={businessStore} proposalStore={proposalStore}/>:null}</>;
   return <><div className="page-heading"><div><span className="eyebrow">{school.schoolName}</span><h1>시민 관리</h1><p>우리 학교 시민의 등록 상태를 확인합니다.</p></div><span className="tag">교사 운영실</span></div>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:<><section className="panel"><div className="section-heading"><h2>학생 명단 <span className="count">{students.length}</span></h2><div className="header-actions"><button className="button quiet" onClick={()=>setRefresh(n=>n+1)}>새로고침</button><button className="button primary" onClick={()=>setImporting(!importing)}>명단 가져오기</button></div></div>{students.length===100&&<p className="notice">현재 이름순 첫 100명입니다. 대규모 명단은 다음 관리 단계에서 페이지 조회를 확장합니다.</p>}{students.length?<div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>반</th><th>학년도</th><th>상태</th><th></th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td>{s.name}</td><td>{s.grade}학년</td><td>{s.className??'미지정'}</td><td>{s.schoolYear}</td><td>{s.status==='active'?'활동 중':s.status==='graduated'?'졸업':'전출'}</td><td><button className="button quiet" onClick={()=>setEditingStudent(s)}>수정</button></td></tr>)}</tbody></table></div>:<div className="empty">등록된 학생이 없습니다. 명단을 확인한 뒤 가져와 주세요.</div>}</section>
     {editingStudent&&<form className="panel section action-form" onSubmit={saveStudent}>
       <h3>{editingStudent.name} 정보 수정</h3>
@@ -120,5 +124,5 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
       <p className="muted">졸업·전출으로 바꿔도 기록은 보존됩니다. 로그인 계정 활성화는 이 화면에서 다루지 않습니다.</p>
       <div className="header-actions"><button className="button primary" disabled={savingStudent}>저장</button><button type="button" className="button quiet" onClick={()=>setEditingStudent(null)}>취소</button></div>
     </form>}
-    {importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={true} students={students} studentId={context.membership.studentId??undefined}/></div><div className="section"><TaskWorkspace taskStore={taskStore} careerStore={store} teacher={true} students={students}/></div><div className="section"><BankWorkspace store={financeStore} savingsStore={savingsStore} teacher={true} currencySymbol={school.currencyName}/></div><div className="section"><StoreWorkspace store={businessStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><CivicWorkspace store={proposalStore} teacher={true} students={students}/></div><div className="section"><OperationsWorkspace auditStore={auditStore} careerStore={store} taskStore={taskStore} businessStore={businessStore} proposalStore={proposalStore} students={students}/></div><div className="notice section">대출은 다음 단계에서 연결합니다.</div></>}</>;
+    {importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={true} students={students} studentId={context.membership.studentId??undefined}/></div><div className="section"><TaskWorkspace taskStore={taskStore} careerStore={store} teacher={true} students={students}/></div><div className="section"><BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><StoreWorkspace store={businessStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><CivicWorkspace store={proposalStore} teacher={true} students={students}/></div><div className="section"><OperationsWorkspace auditStore={auditStore} careerStore={store} taskStore={taskStore} businessStore={businessStore} proposalStore={proposalStore} students={students}/></div></>}</>;
 }

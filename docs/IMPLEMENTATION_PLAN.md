@@ -318,3 +318,13 @@ RULE/EVENT/COMMUNITY 제안 종류, 초안(draft) 저장, 시민 의견(댓글)�
 구현: `financialProducts`(교사 설정, kind는 'savings'로 고정 — §17, 기본 단기 월5%/1~3개월·장기 월10%/4개월+ 프리셋 제공, 상태 전이로만 닫힘) + `savings`(학생 자기 신청, 가입은 구매와 같은 즉시 자기실행). 이자는 가입 시점이 아니라 만기 정산(교사 세션, 기존 월급 정산과 동일한 미리보기→확정 구조)에서만 계산·확정한다 — `simpleInterest()`(기존 `src/domain/money.ts`, 100×5%×3=15 예시로 이미 검증됨)를 Firestore Rules 언어로 재구현하는 위험을 피하기 위함. 새 원장 거래 종류 `SAVINGS_DEPOSIT`/`INTEREST`를 추가했다(다형적 journal로 일반화하지 않음, D-17 그대로). 만기 정산의 journal id(`interest~{contractId}`)가 D-18과 동일한 멱등키다. 근거는 `docs/DECISIONS.md` D-48~D-51.
 
 만기 전 정산을 규칙 레벨에서 막지는 않는다 — 월급 정산이 정산 월(period)을 전적으로 교사 클라이언트에 맡기는 것과 같은 신뢰 수준이며(`previewMaturities`가 만기 도래분만 나열), 저축의 실제 안전 속성(이중 지급 방지, 금액 위조 방지, 행위자 검증)은 이미 규칙으로 완전히 보장된다.
+
+## 22. 대출 1차 구현 범위 — financialRequests/financeReviews 최초 도입 (신규)
+
+2026-09-14: 저축에서 제외했던 대출을 연결했다. 대출은 저축과 달리 원문 §20이 "은행원 검토 → 필요 시 교사 승인"을 명시적으로 요구한다 — 목적·상환계획에 대한 사람의 판단이 필요해 규칙만으로 완전히 검증할 수 없기 때문이다. 그래서 §5가 설계해 둔 `financialRequests`(학생 요청) → `financeReviews`(은행원 학생 검증) → 교사 세션 실행 워크플로를 이번에 처음 실제로 연결했다 — D-17/D-48이 "검증된 두 번째 구체 사례 없이 먼저 일반화하지 않는다"고 미뤄 둔 지점이 저축(첫 번째 사례)을 거쳐 이제 충족됐다.
+
+구현: `financialProducts`의 `kind`를 `'savings'|'loan'`으로 넓혀 저축과 같은 컬렉션·같은 검증 로직(`validateFinancialProduct`/`validAmount`/`validMonths`, 이번에 `src/domain/finance.ts`로 옮겨 공유)을 재사용한다(단기대출 월6%/1~3개월, 장기대출 월12%/4개월+ — §15). `financialRequests`는 제안 워크플로(§17)와 동일한 교사-게이트 상태 전이(`submitted→assigned→reviewed→approved/rejected`)를 쓴다: 학생 제출 → 교사가 검토자 지정(반드시 은행원 직업 보유자일 필요는 없음, D-53) → 배정된 검토자가 `financeReviews`(체크리스트, doc id=requestId) 제출 → 교사가 승인(대출 실행) 또는 어느 단계에서든 반려. 승인은 제안 승인(§17)과 같은 방식으로 요청 문서 갱신 + `loans` 계약 생성 + `LOAN` journal을 한 트랜잭션에 묶는다.
+
+상환은 저축 가입과 같은 즉시 자기실행 신뢰 모델이다(D-23/D-48 연장) — "빌려줄지" 판단은 검토가 필요하지만 "갚는 것" 자체는 계약에 고정된 금액과 잔액만 재확인하면 되기 때문이다. 1차 구현은 **전액 일시상환만** 지원한다(분할·중도상환은 저축의 중도해지와 같은 이유로 다음 단계, D-52). `LOAN`/`LOAN_REPAYMENT` journal은 저축의 `SAVINGS_DEPOSIT`/`INTEREST`와 구조가 완전히 같아 규칙 shape 검증기를 `studentToIssuerJournalShape`/`issuerToStudentJournalShape`로 일반화해 재사용한다.
+
+이 단계에서 실제 버그 하나를 발견해 고쳤다: 저축 가입(`openSavings`)이 학생 계좌만 차감하고 `system-issuer` 계좌를 한 번도 갱신하지 않아, D-19가 약속한 "전체 계좌 잔액 합=0" 복식 원장 불변식이 저축에서는 실제로 깨져 있었다(배포까지 됐던 상태). 대출 상환에서 같은 실수를 하지 않으려다 발견했다. 고치면서 학생이 자기 트랜잭션 안에서 `system-issuer` 계좌를 읽어야 하는데 기존 `accounts` get 규칙이 이를 허용하지 않던 것도 함께 드러나 고쳤다. 근거는 `docs/DECISIONS.md` D-52~D-55.

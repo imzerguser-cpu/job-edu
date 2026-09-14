@@ -4,6 +4,7 @@ import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvir
 import {doc,setDoc,serverTimestamp,writeBatch,Timestamp,type Firestore} from 'firebase/firestore';
 import {firestoreSavings} from '../src/data/savingsRepository';
 import {firestoreFinance} from '../src/data/financeRepository';
+import {firestoreFinancialProducts} from '../src/data/financialProductRepository';
 import type {SchoolContext} from '../src/domain/model';
 
 let env:RulesTestEnvironment;
@@ -11,6 +12,7 @@ const db=(uid:string)=>env.authenticatedContext(uid).firestore() as unknown as F
 const context=(role:'student'|'teacher',sid='a',studentId='one'):SchoolContext=>({schoolId:sid,uid:role==='teacher'?`teacher-${sid}`:`${sid}-${studentId}`,membership:{schoolId:sid,role,studentId:role==='student'?studentId:null,status:'active'}});
 const savings=(role:'student'|'teacher',sid='a',studentId='one')=>{const c=context(role,sid,studentId);return firestoreSavings(db(c.uid),c)};
 const finance=(role:'student'|'teacher',sid='a',studentId='one')=>{const c=context(role,sid,studentId);return firestoreFinance(db(c.uid),c)};
+const products=(role:'student'|'teacher',sid='a',studentId='one')=>{const c=context(role,sid,studentId);return firestoreFinancialProducts(db(c.uid),c)};
 
 // Bypasses savingsRepository.openSavings entirely so an intentionally invalid field (an
 // out-of-range amount, a forged rate, a mismatched student) can be isolated and checked
@@ -43,16 +45,16 @@ afterAll(async()=>{await env.cleanup()});
 
 describe('저축 상품',()=>{
   it('교사만 상품을 만들 수 있고, 학생은 조회만 가능하다',async()=>{
-    const teacher=savings('teacher');
-    await teacher.createProduct({name:'장기저축',rateBpsMonthly:1000,minMonths:4,maxMonths:12,minMinor:0,maxMinor:1_000_000_000,status:'active'});
-    const products=await assertSucceeds(savings('student','a','one').listProducts());
-    expect(products.length).toBe(2);
+    const teacher=products('teacher');
+    await teacher.createProduct('savings',{name:'장기저축',rateBpsMonthly:1000,minMonths:4,maxMonths:12,minMinor:0,maxMinor:1_000_000_000,status:'active'});
+    const list=await assertSucceeds(products('student','a','one').listProducts());
+    expect(list.length).toBe(2);
     await assertFails(setDoc(doc(db('a-one'),'schools/a/financialProducts/hack'),{schoolId:'a',kind:'savings',name:'x',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:0,maxMinor:1000,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
   });
   it('상품은 상태 전이로만 닫히고 하드 삭제되지 않는다',async()=>{
-    await savings('teacher').closeProduct('short');
-    const products=await savings('student','a','one').listProducts();
-    expect(products.find(p=>p.id==='short')?.status).toBe('closed');
+    await products('teacher').closeProduct('short');
+    const list=await products('student','a','one').listProducts();
+    expect(list.find(p=>p.id==='short')?.status).toBe('closed');
   });
   it('다른 학교 상품에는 접근할 수 없다',async()=>{
     await assertFails(setDoc(doc(db('teacher-a'),'schools/b/financialProducts/hack'),{schoolId:'b',kind:'savings',name:'x',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:0,maxMinor:1000,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
@@ -60,18 +62,22 @@ describe('저축 상품',()=>{
 });
 
 describe('저축 가입',()=>{
-  it('상품 범위 안의 금액·기간으로 가입하면 원금이 계좌에서 빠지고 계약이 생긴다',async()=>{
+  it('상품 범위 안의 금액·기간으로 가입하면 원금이 계좌에서 빠지고(양쪽 계좌가 대사되어) 계약이 생긴다',async()=>{
     await savings('student','a','one').openSavings({productId:'short',principalMinor:50000,months:3});
     const account=await finance('student','a','one').myAccount();
     expect(account?.balanceMinor).toBe(50000);
     const contracts=await savings('student','a','one').myContracts();
     expect(contracts).toHaveLength(1);
     expect(contracts[0]).toMatchObject({principalMinor:50000,months:3,status:'active',productSnapshot:{rateBpsMonthly:500}});
+    await env.withSecurityRulesDisabled(async c=>{
+      const issuerDoc=await c.firestore().doc('schools/a/accounts/system-issuer').get();
+      expect(issuerDoc.data()?.balanceMinor).toBe(-50000); // started at -100000, credited 50000 by the deposit
+    });
   });
   it('잔액보다 큰 금액은 가입할 수 없다',async()=>{
-    await savings('teacher').createProduct({name:'무제한저축',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:0,maxMinor:1_000_000_000,status:'active'});
-    const products=await savings('teacher').listProducts();
-    const big=products.find(p=>p.name==='무제한저축')!.id;
+    await products('teacher').createProduct('savings',{name:'무제한저축',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:0,maxMinor:1_000_000_000,status:'active'});
+    const list=await products('teacher').listProducts();
+    const big=list.find(p=>p.name==='무제한저축')!.id;
     await expect(savings('student','a','one').openSavings({productId:big,principalMinor:200000,months:1})).rejects.toThrow();
   });
   it('상품 범위를 벗어난 금액·기간의 가입은 규칙에서 거부된다(클라이언트 우회 시도)',async()=>{

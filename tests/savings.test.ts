@@ -1,32 +1,29 @@
 import {describe,it,expect} from 'vitest';
 import {simpleInterest} from '../src/domain/money';
-import {
-  defaultSavingsProducts,savingsDepositJournalId,savingsInterestJournalId,
-  validSavingsAmount,validSavingsMonths,validateSavingsProduct,
-  type SavingsProduct,
-} from '../src/domain/savings';
+import {validAmount,validMonths,validateFinancialProduct,type FinancialProduct} from '../src/domain/finance';
+import {defaultSavingsProducts,savingsDepositJournalId,savingsInterestJournalId} from '../src/domain/savings';
 
-const product:SavingsProduct={id:'p1',schoolId:'a',kind:'savings',name:'단기저축',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:1000,maxMinor:100000,status:'active',schemaVersion:1};
+const product:FinancialProduct={id:'p1',schoolId:'a',kind:'savings',name:'단기저축',rateBpsMonthly:500,minMonths:1,maxMonths:3,minMinor:1000,maxMinor:100000,status:'active',schemaVersion:1};
 
-describe('저축 상품 검증',()=>{
+describe('저축 상품 검증(공유 FinancialProduct 검증기)',()=>{
   it('기본 단기·장기 상품은 요구사항의 이율·기간을 그대로 담는다',()=>{
     const [short,long]=defaultSavingsProducts('a');
     expect(short).toMatchObject({rateBpsMonthly:500,minMonths:1,maxMonths:3});
     expect(long).toMatchObject({rateBpsMonthly:1000,minMonths:4});
   });
   it('상품 범위를 벗어난 값은 거부한다',()=>{
-    expect(()=>validateSavingsProduct({...product,name:''})).toThrow();
-    expect(()=>validateSavingsProduct({...product,rateBpsMonthly:10001})).toThrow();
-    expect(()=>validateSavingsProduct({...product,minMonths:5,maxMonths:3})).toThrow();
-    expect(()=>validateSavingsProduct({...product,minMinor:200000,maxMinor:100000})).toThrow();
-    expect(()=>validateSavingsProduct(product)).not.toThrow();
+    expect(()=>validateFinancialProduct({...product,name:''})).toThrow();
+    expect(()=>validateFinancialProduct({...product,rateBpsMonthly:10001})).toThrow();
+    expect(()=>validateFinancialProduct({...product,minMonths:5,maxMonths:3})).toThrow();
+    expect(()=>validateFinancialProduct({...product,minMinor:200000,maxMinor:100000})).toThrow();
+    expect(()=>validateFinancialProduct(product)).not.toThrow();
   });
   it('가입 금액·기간이 상품 범위 안인지 판정한다',()=>{
-    expect(validSavingsAmount(product,1000)).toBe(true);
-    expect(validSavingsAmount(product,999)).toBe(false);
-    expect(validSavingsAmount(product,100001)).toBe(false);
-    expect(validSavingsMonths(product,3)).toBe(true);
-    expect(validSavingsMonths(product,4)).toBe(false);
+    expect(validAmount(product,1000)).toBe(true);
+    expect(validAmount(product,999)).toBe(false);
+    expect(validAmount(product,100001)).toBe(false);
+    expect(validMonths(product,3)).toBe(true);
+    expect(validMonths(product,4)).toBe(false);
   });
 });
 describe('저축 이자(요구사항 예시 재검증)',()=>{

@@ -178,6 +178,20 @@ D-17이 정한 대로, `journal.type`을 여전히 폐쇄 열거형으로 유지
 **D-51. 만기 정산의 journal id(`interest~{contractId}`)는 D-18과 동일한 멱등키다.**
 가입 시 journal id는 `savingsDeposit~{contractId}`(contractId는 클라이언트가 만드는 fresh id — PURCHASE와 같은 신뢰 수준, 재시도 시 서로 다른 계약이 생기는 것을 감수한다). 반면 만기 정산의 journal id는 계약 id에서 결정적으로 파생되므로, 같은 계약을 두 번 정산하려는 시도(예: 오래된 미리보기 캐시로 재시도)는 이미 존재하는 journal을 다시 만들려는 시도가 되어 `allow update, delete: if false`에 걸려 조용히 실패한다 — `settleMaturities`는 이를 트랜잭션이 반환하는 `'skipped'` 결과로 구분해 카운트한다(단순히 `catch`로 흡수해 `paid`를 잘못 증가시키지 않도록, 기존 `settleSalary`의 카운팅 방식보다 한 단계 더 정확하게 만들었다).
 
+## 대출 1차 구현
+
+**D-52. 대출 상환은 저축 가입과 같은 신뢰 모델(학생 즉시 자기실행)을 쓰고, 1차 구현은 전액 일시상환만 지원한다.**
+원문 §20이 대출에 요구하는 "은행원 검토 → 필요 시 교사 승인"은 대출 **실행(원금을 내줄지 판단)**에 대한 것이지, **상환(갚을 금액을 갚는 것)**에 대한 것이 아니다 — 상환액은 계약(`totalOwedMinor`)에 이미 고정돼 있고 잔액이 충분한지만 확인하면 되므로 규칙이 그 자리에서 완전히 검증할 수 있다(구매/저축가입과 같은 신뢰 수준, D-23/D-48). 분할·중도상환은 `IMPLEMENTATION_PLAN.md` §6이 저축의 중도해지에 대해 이미 미뤄 둔 것과 같은 이유(별도 상환 정책 설계가 필요)로 다음 단계로 미룬다. `LoanContract`에 `repaidMinor` 필드는 원문이 요구한 "상환 기록"을 위해 남겨 뒀지만, 1차 구현에서는 항상 0 또는 `totalOwedMinor` 둘 중 하나만 갖는다(부분값을 갖지 않음).
+
+**D-53. 대출 검토자 배정은 "은행원 직업을 가진 학생"을 강제하지 않는다.**
+원문 §21은 검증이 "실제 직업 업무가 된다"고 하지만, 학교마다 은행원 job의 존재·id가 다를 수 있고(교사가 직업을 삭제·개명 가능) 이를 하드코딩하면 깨지기 쉽다. `assignReviewer`는 jobApplications 승인이 이미 그렇듯 교사가 활동 중인 학생 아무나를 지정할 수 있게 한다 — "이 학생이 실제로 은행원 직업을 맡았는지"는 교사의 판단에 맡긴다(신뢰 수준은 다른 교사 배정 작업과 동일). 은행원 업무와 대출 검토를 실제 Task 시스템으로 엮는 것은 별도 통합 작업이며 이번 범위가 아니다.
+
+**D-54. `financialProducts`를 저축·대출 공용 `FinancialProduct`(`kind:'savings'|'loan'`)로 일반화한다 — 이제 검증된 두 번째 구체 사례가 있기 때문이다.**
+저축 1차 구현 때는(D-48) "두 번째 구체 사례 없이 먼저 일반화하지 않는다"(D-17)는 이유로 상품 타입을 `kind:'savings'` 고정 리터럴로 좁게 유지했다. 이제 대출이 정확히 같은 필드(이율·기간·금액 범위·상태)를 필요로 하는 두 번째 사례로 확인됐으므로, `validateFinancialProduct`/`validAmount`/`validMonths`(`src/domain/savings.ts`에 있던 `validateSavingsProduct`/`validSavingsAmount`/`validSavingsMonths`를 일반화해 `src/domain/finance.ts`로 이동)와 `financialProducts` 컬렉션의 `kind` 검증(`=='savings'`→`in ['savings','loan']`)을 공유한다. 같은 이유로 `journals`의 저축 전용 shape 검증기 `savingsDepositJournalShape`/`interestJournalShape`도 `studentToIssuerJournalShape`/`issuerToStudentJournalShape`로 일반화해 `SAVINGS_DEPOSIT`/`LOAN_REPAYMENT`와 `INTEREST`/`LOAN`이 각각 재사용한다 — 네 거래 종류 모두 "학생 하나 ↔ system-issuer, `{studentId,contractId}`로 식별" 형태가 완전히 같기 때문이다. 상품 CRUD(`listProducts`/`createProduct`/`closeProduct`)도 `src/data/financialProductRepository.ts`로 옮겨 저축·대출 스토어가 공유한다.
+
+**D-55. (재발 방지 기록) 저축 가입이 `system-issuer` 계좌를 갱신하지 않던 버그를 대출 구현 중 발견해 고쳤다 — 학생이 상대 계좌를 읽어야 하는 트랜잭션에는 `accounts` get 규칙이 별도로 필요하다.**
+대출 상환(`repay`)을 저축 만기 정산(`settleMaturities`)과 대칭으로 구현하려고 보니, 저축 가입(`openSavings`)이 애초에 학생 계좌만 차감하고 `system-issuer` 쪽은 한 번도 갱신하지 않았다는 것이 드러났다 — D-19가 약속한 "전체 계좌 잔액 합은 항상 0" 불변식이 저축 경로에서는 실제로 지켜지지 않은 채 배포까지 됐던 것이다(구매/월급은 원래 양쪽을 다 갱신하고 있어 문제없었다). 저축 가입에 issuer 계좌 갱신을 추가하면서 동시에 새 문제가 드러났다: `accounts/{accountId}` 규칙의 `get`은 `teacher(sid) || ownStudent(sid,accountId) || exists(businessPath(accountId))`였는데, 학생이 자기 트랜잭션 안에서 `system-issuer`(accountId가 자신의 studentId도 아니고 business도 아님) 계좌를 읽으려 하면 거부됐다 — 이는 대출 상환에서도 똑같이 발생할 문제였다. 두 경우 모두 학생이 "상대방"(issuer) 계좌의 현재 잔액을 읽어야 정확한 증가분을 계산해 쓸 수 있다는, 사업 계좌에 이미 적용했던 것과 같은 이유(D-25)다. `accountId=='system-issuer'`를 get 조건에 추가해 해결했다 — 발행 계좌 잔액은 특정 학생의 개인정보가 아니라 학교 전체의 공유 정보이므로(사업 계좌와 같은 성격) 노출에 문제가 없다고 판단했다. **재사용 가능한 교훈**: 학생이 자기 자신 외의 계좌를 트랜잭션에서 다루는 새 기능을 만들 때는, 그 계좌에 대한 `get` 권한이 실제로 있는지 먼저 확인한다 — 트랜잭션 로직만 맞고 read 권한을 빠뜨리면 에뮬레이터에서 "evaluation error"로만 나타나 원인을 즉시 알기 어렵다.
+
 ## 문서화 방식
 
 **D-13. `docs/IMPLEMENTATION_PLAN.md`는 유지하고 새로 쓰지 않는다.**
