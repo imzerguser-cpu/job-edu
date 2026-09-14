@@ -216,6 +216,7 @@ function TeacherBank({store,savingsStore,loanStore,productStore,students,currenc
     </>}
     <p className="muted">가입한 학생 계좌는 첫 월급 지급 때 자동으로 만들어집니다. 같은 달에 같은 직업으로 두 번 지급되지 않습니다.</p>
     {context&&<TeacherIncomeTax store={store} context={context} initialRateBp={incomeTaxRateBp} period={period} currencySymbol={currencySymbol}/>}
+    <TeacherCommunityFund store={store} currencySymbol={currencySymbol}/>
     <TeacherProducts productStore={productStore} currencySymbol={currencySymbol}/>
     <TeacherSavingsMaturities savingsStore={savingsStore} currencySymbol={currencySymbol}/>
     <TeacherLoanRequests loanStore={loanStore} students={students} currencySymbol={currencySymbol}/>
@@ -270,6 +271,38 @@ function TeacherIncomeTax({store,context,initialRateBp,period,currencySymbol}:{s
       </>}
     </>}
     <p className="muted">세율은 교사만 설정할 수 있고 학생은 스스로 세금을 부과할 수 없어요. 걷은 세금은 공동기금 계좌에 모입니다.</p>
+  </div>;
+}
+
+function TeacherCommunityFund({store,currencySymbol}:{store:FinanceStore;currencySymbol:string}){
+  const [balance,setBalance]=useState<number|null>(null);
+  const [entries,setEntries]=useState<AccountEntry[]>([]);
+  const [description,setDescription]=useState(''),[amount,setAmount]=useState(0);
+  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
+  const mounted=useRef(true);
+  async function load(){
+    const [account,list]=await Promise.all([store.communityFundAccount(),store.communityFundEntries()]);
+    if(mounted.current){setBalance(account?.balanceMinor??0);setEntries(list)}
+  }
+  useEffect(()=>{mounted.current=true;load().catch(e=>setError((e as Error).message));return()=>{mounted.current=false}},[store]);
+  async function spend(){
+    setBusy(true);setError('');setMessage('');
+    try{await store.spendCommunityFund(description,Math.round(amount*100));setMessage('공동기금을 지출했어요.');setDescription('');setAmount(0);await load()}
+    catch(e){setError((e as Error).message)}
+    finally{setBusy(false)}
+  }
+  return <div className="section">
+    <div className="section-heading"><h2>공동기금</h2></div>
+    {error&&<p role="alert" className="error">{error}</p>}
+    {message&&<p role="status" className="success">{message}</p>}
+    <p className="muted">현재 잔액 {formatMoney(balance??0,currencySymbol)} (소득세·사업 세금·과태료가 모입니다)</p>
+    <div className="assignment-form">
+      <label>지출 내용<input maxLength={200} value={description} onChange={e=>setDescription(e.target.value)}/></label>
+      <label>금액({currencySymbol})<input type="number" min={1} max={10000} step={1} value={amount||''} onChange={e=>setAmount(Number(e.target.value))}/></label>
+      <button className="button primary" disabled={busy||!description.trim()||!amount} onClick={spend}>지출하기</button>
+    </div>
+    <h4>최근 내역</h4>
+    {!entries.length?<p className="empty">아직 거래 내역이 없어요.</p>:<div className="list">{entries.map(e=><article key={e.id} className="task-row"><div className="task-row-head"><b>{e.label}</b><span className="badge">{e.deltaMinor>=0?'+':''}{formatMoney(e.deltaMinor,currencySymbol)}</span></div></article>)}</div>}
   </div>;
 }
 

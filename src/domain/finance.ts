@@ -1,6 +1,6 @@
 export const ISSUER_ACCOUNT_ID='system-issuer';
 export const COMMUNITY_FUND_ACCOUNT_ID='community-fund';
-export type JournalType='SALARY'|'PURCHASE'|'SAVINGS_DEPOSIT'|'INTEREST'|'LOAN'|'LOAN_REPAYMENT'|'INCOME_TAX'|'BUSINESS_TAX'|'FINE';
+export type JournalType='SALARY'|'PURCHASE'|'SAVINGS_DEPOSIT'|'INTEREST'|'LOAN'|'LOAN_REPAYMENT'|'INCOME_TAX'|'BUSINESS_TAX'|'FINE'|'FUND_EXPENSE';
 export interface Account {id:string;schoolId:string;ownerType:'student'|'school'|'business';ownerId:string;balanceMinor:number;version:number;lastJournalId:string|null;status:'active';schemaVersion:1}
 export interface SalaryJournal {id:string;schoolId:string;type:'SALARY';jobId:string;studentId:string;period:string;debitAccountId:string;creditAccountId:string;amountMinor:number;postedBy:string;schemaVersion:1}
 export interface AccountEntry {id:string;schoolId:string;journalId:string;type:JournalType;deltaMinor:number;balanceAfterMinor:number;label:string}
@@ -47,4 +47,16 @@ export function incomeTaxJournalId(studentId:string,period:string){
   if(!periodPattern(period))throw new Error('정산 월(YYYY-MM)을 확인해 주세요.');
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(studentId))throw new Error('시민 식별자를 확인해 주세요.');
   return `tax~${studentId}~${period}`;
+}
+
+// 공동기금 지출(§23) — 걷힌 세금·과태료를 실제로 쓰는 쪽. 한 번뿐인 사건성 행동이라(구매처럼)
+// 미리보기 없이 즉시 실행하며, 결정적 ID 대신 무작위 ID를 쓴다(D-24의 PURCHASE와 같은 이유 —
+// 반복 지출이 자연스럽고 중복 방지가 필요 없음). 공동기금에서 나간 돈은 시스템 발행 계좌로
+// 돌아간다 — 실제 세계로 나간 돈이 다시 "발행 취소"되는 것으로 모델링해 전체 계좌 합=0(D-19)을
+// 유지한다.
+export function validateFundExpenseDescription(description:string){
+  if(!description.trim()||description.length>200)throw new Error('지출 내용을 1~200자로 적어 주세요.');
+}
+export function validateFundExpenseAmount(amountMinor:number){
+  if(!Number.isInteger(amountMinor)||amountMinor<=0||amountMinor>1000000)throw new Error('지출 금액을 확인해 주세요.');
 }

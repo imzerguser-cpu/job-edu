@@ -296,7 +296,8 @@ service cloud.firestore {
           || (j.type=='LOAN_REPAYMENT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
           || (j.type=='INCOME_TAX' && teacher(sid))
           || (j.type=='BUSINESS_TAX' && teacher(sid))
-          || (j.type=='FINE' && teacher(sid));
+          || (j.type=='FINE' && teacher(sid))
+          || (j.type=='FUND_EXPENSE' && teacher(sid));
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -363,7 +364,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE','FUND_EXPENSE']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -582,6 +583,20 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // Community fund expense (§23) — one-shot like PURCHASE (D-24): random journal id, no
+      // idempotency key needed since repeat spending is expected. Money leaves back to
+      // system-issuer (no real-world payee account exists in this ledger) to keep the
+      // all-accounts-sum-to-zero invariant (D-19).
+      function fundExpenseJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','description','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','description','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.description is string && d.description.size()>0 && d.description.size()<=200
+          && d.debitAccountId=='community-fund' && d.creditAccountId=='system-issuer'
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       // Fine (§24) — teacher-session, one journal per report (not per period, since fines are
       // event-triggered not periodic), tied to the deciding report via reportId.
       function fineJournalShape() {
@@ -618,78 +633,95 @@ service cloud.firestore {
         // the contract id so it lines up with the getAfter check in the savings create rule.
         // Interest: teacher-session settlement, id derived from contract id, the id itself being
         // the idempotency key so a retried maturity settlement can never double-pay (D-18 pattern).
-        allow create: if
-          (teacher(sid) && salaryJournalShape() && request.resource.data.type=='SALARY'
-            && journalId==('salary~'+request.resource.data.jobId+'~'+request.resource.data.studentId+'~'+request.resource.data.period)
-            && get(jobPath(request.resource.data.jobId)).data.salaryMinor==request.resource.data.amountMinor
-            && get(assignmentPath(request.resource.data.jobId+'~'+request.resource.data.studentId)).data.status=='active'
-            && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.studentId)).data.status=='active')
+        allow create: if journalCreateOk(journalId);
+        allow update, delete: if false;
+      }
+      // Split out of the `allow create` above and memoized with `let` (D-73): with 9 journal
+      // types the OR-chain's repeated teacher(sid)/activeStudent(sid)/callerStudentId(sid) calls
+      // (each its own get() on the member doc) pushed evaluation past Firestore's ~1000
+      // sub-expression budget per request, so the whole create was silently denied even though
+      // one branch was genuinely true. Computing each once here and reusing the result fixes it
+      // without changing what any branch actually checks.
+      function journalCreateOk(journalId) {
+        let d = request.resource.data;
+        let isTeacher = teacher(sid);
+        let isActiveStudent = activeStudent(sid);
+        let myStudentId = isActiveStudent ? callerStudentId(sid) : null;
+        return
+          (isTeacher && salaryJournalShape() && d.type=='SALARY'
+            && journalId==('salary~'+d.jobId+'~'+d.studentId+'~'+d.period)
+            && get(jobPath(d.jobId)).data.salaryMinor==d.amountMinor
+            && get(assignmentPath(d.jobId+'~'+d.studentId)).data.status=='active'
+            && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active')
           ||
-          (journalId.matches('^[A-Za-z0-9_-]{1,100}$') && purchaseJournalShape() && request.resource.data.type=='PURCHASE'
-            && activeStudent(sid) && callerStudentId(sid)==request.resource.data.buyerStudentId
-            && get(businessPath(request.resource.data.businessId)).data.status=='active'
-            && get(productPath(request.resource.data.productId)).data.businessId==request.resource.data.businessId
-            && get(productPath(request.resource.data.productId)).data.status=='active'
-            && get(productPath(request.resource.data.productId)).data.stock>=1
-            && get(productPath(request.resource.data.productId)).data.priceMinor==request.resource.data.amountMinor
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.buyerStudentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          (journalId.matches('^[A-Za-z0-9_-]{1,100}$') && purchaseJournalShape() && d.type=='PURCHASE'
+            && isActiveStudent && myStudentId==d.buyerStudentId
+            && get(businessPath(d.businessId)).data.status=='active'
+            && get(productPath(d.productId)).data.businessId==d.businessId
+            && get(productPath(d.productId)).data.status=='active'
+            && get(productPath(d.productId)).data.stock>=1
+            && get(productPath(d.productId)).data.priceMinor==d.amountMinor
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.buyerStudentId)).data.balanceMinor>=d.amountMinor)
           ||
-          (studentToIssuerJournalShape() && request.resource.data.type=='SAVINGS_DEPOSIT'
-            && activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
-            && journalId==('savingsDeposit~'+request.resource.data.contractId)
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          (studentToIssuerJournalShape() && d.type=='SAVINGS_DEPOSIT'
+            && isActiveStudent && myStudentId==d.studentId
+            && journalId==('savingsDeposit~'+d.contractId)
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
-          (teacher(sid) && issuerToStudentJournalShape() && request.resource.data.type=='INTEREST'
-            && journalId==('interest~'+request.resource.data.contractId)
-            && get(savingsPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
-            && get(savingsPath(request.resource.data.contractId)).data.status=='active')
+          (isTeacher && issuerToStudentJournalShape() && d.type=='INTEREST'
+            && journalId==('interest~'+d.contractId)
+            && get(savingsPath(d.contractId)).data.studentId==d.studentId
+            && get(savingsPath(d.contractId)).data.status=='active')
           ||
           // Loan disbursement: only as part of approving the matching financialRequests/{contractId}
           // (still 'reviewed' pre-transaction here, since the request's own update to 'approved'
           // happens in the same transaction) — amount must equal exactly what was requested.
-          (teacher(sid) && issuerToStudentJournalShape() && request.resource.data.type=='LOAN'
-            && journalId==('loan~'+request.resource.data.contractId)
-            && get(financialRequestPath(request.resource.data.contractId)).data.status=='reviewed'
-            && get(financialRequestPath(request.resource.data.contractId)).data.operation=='LOAN'
-            && get(financialRequestPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
-            && get(financialRequestPath(request.resource.data.contractId)).data.principalMinor==request.resource.data.amountMinor)
+          (isTeacher && issuerToStudentJournalShape() && d.type=='LOAN'
+            && journalId==('loan~'+d.contractId)
+            && get(financialRequestPath(d.contractId)).data.status=='reviewed'
+            && get(financialRequestPath(d.contractId)).data.operation=='LOAN'
+            && get(financialRequestPath(d.contractId)).data.studentId==d.studentId
+            && get(financialRequestPath(d.contractId)).data.principalMinor==d.amountMinor)
           ||
           // Loan repayment: self-service full payoff, same trust tier as SAVINGS_DEPOSIT/PURCHASE —
           // amount must equal exactly the contract's outstanding total, not a client-chosen figure.
-          (studentToIssuerJournalShape() && request.resource.data.type=='LOAN_REPAYMENT'
-            && activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
-            && journalId==('loanRepayment~'+request.resource.data.contractId)
-            && get(loanPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
-            && get(loanPath(request.resource.data.contractId)).data.status=='active'
-            && get(loanPath(request.resource.data.contractId)).data.totalOwedMinor==request.resource.data.amountMinor
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          (studentToIssuerJournalShape() && d.type=='LOAN_REPAYMENT'
+            && isActiveStudent && myStudentId==d.studentId
+            && journalId==('loanRepayment~'+d.contractId)
+            && get(loanPath(d.contractId)).data.studentId==d.studentId
+            && get(loanPath(d.contractId)).data.status=='active'
+            && get(loanPath(d.contractId)).data.totalOwedMinor==d.amountMinor
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
           // Income tax: teacher-session settlement (like SALARY/INTEREST), amount trusted from
           // the app-computed preview (same tier as INTEREST — see D-51) rather than re-derived
           // from summing SALARY journals in Rules, which can't aggregate across documents. The
           // hard invariants Rules do enforce: target student is active, and the debit can never
           // drive their balance negative.
-          (teacher(sid) && incomeTaxJournalShape() && request.resource.data.type=='INCOME_TAX'
-            && journalId==('tax~'+request.resource.data.studentId+'~'+request.resource.data.period)
-            && get(/databases/$(database)/documents/schools/$(sid)/students/$(request.resource.data.studentId)).data.status=='active'
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          (isTeacher && incomeTaxJournalShape() && d.type=='INCOME_TAX'
+            && journalId==('tax~'+d.studentId+'~'+d.period)
+            && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active'
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
           // Business tax: same trust tier as INCOME_TAX (teacher-session, amount trusted from the
           // app-computed preview) — debits the business's own account instead of a student's.
-          (teacher(sid) && businessTaxJournalShape() && request.resource.data.type=='BUSINESS_TAX'
-            && journalId==('businessTax~'+request.resource.data.businessId+'~'+request.resource.data.period)
-            && get(businessPath(request.resource.data.businessId)).data.status=='active'
-            && get(accountPath(request.resource.data.businessId)).data.balanceMinor>=request.resource.data.amountMinor)
+          (isTeacher && businessTaxJournalShape() && d.type=='BUSINESS_TAX'
+            && journalId==('businessTax~'+d.businessId+'~'+d.period)
+            && get(businessPath(d.businessId)).data.status=='active'
+            && get(accountPath(d.businessId)).data.balanceMinor>=d.amountMinor)
           ||
           // Fine: only as part of deciding the matching violationReports/{reportId} (still
           // 'submitted' pre-transaction here, since the report's own update to 'fined' happens in
           // the same transaction) — target student and amount must match the report being decided.
-          (teacher(sid) && fineJournalShape() && request.resource.data.type=='FINE'
-            && journalId==('fine~'+request.resource.data.reportId)
-            && get(violationReportPath(request.resource.data.reportId)).data.status=='submitted'
-            && get(violationReportPath(request.resource.data.reportId)).data.targetStudentId==request.resource.data.studentId
-            && get(accountPath(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor);
-        allow update, delete: if false;
+          (isTeacher && fineJournalShape() && d.type=='FINE'
+            && journalId==('fine~'+d.reportId)
+            && get(violationReportPath(d.reportId)).data.status=='submitted'
+            && get(violationReportPath(d.reportId)).data.targetStudentId==d.studentId
+            && get(accountPath(d.studentId)).data.balanceMinor>=d.amountMinor)
+          ||
+          (isTeacher && fundExpenseJournalShape() && d.type=='FUND_EXPENSE'
+            && journalId.matches('^[A-Za-z0-9_~-]{1,100}$')
+            && get(accountPath('community-fund')).data.balanceMinor>=d.amountMinor);
       }
       function financialRequestPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialRequests/$(id); }
       function financeReviewPath(id) { return /databases/$(database)/documents/schools/$(sid)/financeReviews/$(id); }

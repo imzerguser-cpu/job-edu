@@ -26,13 +26,13 @@ beforeEach(async()=>{await env.clearFirestore();await env.withSecurityRulesDisab
   }
 })});
 afterAll(async()=>{await env.cleanup()});
+async function paySalary(sid='a',period='2026-09'){
+  const teacher=store('teacher',sid);
+  await teacher.ensureIssuer();
+  await teacher.settleSalary(await teacher.previewSalary(period));
+  return teacher;
+}
 describe('소득세 정산',()=>{
-  async function paySalary(sid='a',period='2026-09'){
-    const teacher=store('teacher',sid);
-    await teacher.ensureIssuer();
-    await teacher.settleSalary(await teacher.previewSalary(period));
-    return teacher;
-  }
   it('공동기금 계좌 준비는 여러 번 실행해도 오류 없이 한 번만 생성된다',async()=>{
     const teacher=store('teacher');
     await teacher.ensureCommunityFund();
@@ -120,5 +120,29 @@ describe('세율 설정',()=>{
     // this asserts the read-side default (schoolRepository.openSchool), not the update rule.
     const {school}=await openSchool(db('teacher-a'),'teacher-a','a');
     expect(school.incomeTaxRateBp).toBe(0);
+  });
+});
+describe('공동기금 지출',()=>{
+  it('세금을 걷은 뒤 지출하면 공동기금에서 차감되고 발행 계좌로 되돌아간다',async()=>{
+    const teacher=await paySalary();
+    await teacher.ensureCommunityFund();
+    await teacher.settleIncomeTax(await teacher.previewIncomeTax('2026-09',500)); // 2500 into fund
+    await teacher.spendCommunityFund('학급 행사 간식',1000);
+    const fund=await teacher.communityFundAccount();
+    expect(fund?.balanceMinor).toBe(1500); // 2500 - 1000
+    const entries=await teacher.communityFundEntries();
+    expect(entries.find(e=>e.type==='FUND_EXPENSE')).toMatchObject({deltaMinor:-1000,balanceAfterMinor:1500,label:'학급 행사 간식'});
+  });
+  it('공동기금 잔액보다 큰 지출은 거부된다',async()=>{
+    const teacher=store('teacher');
+    await teacher.ensureCommunityFund();
+    await expect(teacher.spendCommunityFund('과도한 지출',100000)).rejects.toThrow();
+  });
+  it('학생은 공동기금을 지출할 수 없다',async()=>{
+    const teacher=await paySalary();
+    await teacher.ensureCommunityFund();
+    await teacher.settleIncomeTax(await teacher.previewIncomeTax('2026-09',500));
+    await expect(store('student','a','one').spendCommunityFund('무단 지출',100)).rejects.toThrow();
+    await assertFails(setDoc(doc(db('a-one'),'schools/a/journals/fake-expense'),{schoolId:'a',type:'FUND_EXPENSE',description:'무단 지출',debitAccountId:'community-fund',creditAccountId:'system-issuer',amountMinor:100,postedBy:'a-one',schemaVersion:1,createdAt:serverTimestamp()}));
   });
 });

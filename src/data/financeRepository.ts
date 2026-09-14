@@ -2,7 +2,7 @@ import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,ru
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant} from '../domain/jobs';
-import {COMMUNITY_FUND_ACCOUNT_ID,ISSUER_ACCOUNT_ID,computeIncomeTax,incomeTaxJournalId,salaryJournalId,type Account,type AccountEntry,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../domain/finance';
+import {COMMUNITY_FUND_ACCOUNT_ID,ISSUER_ACCOUNT_ID,computeIncomeTax,incomeTaxJournalId,salaryJournalId,validateFundExpenseAmount,validateFundExpenseDescription,type Account,type AccountEntry,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../domain/finance';
 export interface FinanceStore {
   ensureIssuer():Promise<void>;
   ensureCommunityFund():Promise<void>;
@@ -12,6 +12,9 @@ export interface FinanceStore {
   settleSalary(items:SalaryPreviewItem[]):Promise<{paid:number;skipped:number;failed:number}>;
   previewIncomeTax(period:string,rateBp:number):Promise<IncomeTaxPreviewItem[]>;
   settleIncomeTax(items:IncomeTaxPreviewItem[]):Promise<{paid:number;skipped:number;failed:number}>;
+  communityFundAccount():Promise<Account|null>;
+  communityFundEntries():Promise<AccountEntry[]>;
+  spendCommunityFund(description:string,amountMinor:number):Promise<void>;
 }
 export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -144,6 +147,39 @@ export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStor
         }catch{failed++}
       }
       return {paid,skipped,failed};
+    },
+    async communityFundAccount(){
+      const snap=await getDocFromServer(ref('accounts',COMMUNITY_FUND_ACCOUNT_ID));
+      return snap.exists()?({...snap.data(),id:snap.id} as Account):null;
+    },
+    async communityFundEntries(){
+      teacher();
+      const snap=await getDocsFromServer(query(collection(ref('accounts',COMMUNITY_FUND_ACCOUNT_ID),'entries'),orderBy('postedAt','desc'),limit(20)));
+      return snap.docs.map(d=>({...d.data(),id:d.id} as AccountEntry));
+    },
+    // One-shot, like buy() (D-24) — a random journal id since repeat spending is expected and
+    // there is no natural idempotency key. Money leaves back to system-issuer (D above), not to
+    // any tracked recipient, since there is no real-world payee account in this ledger.
+    async spendCommunityFund(description,amountMinor){
+      teacher();
+      validateFundExpenseDescription(description);validateFundExpenseAmount(amountMinor);
+      const journalId=`fundExpense~${crypto.randomUUID()}`;
+      await runTransaction(db,async tx=>{
+        const fundRef=ref('accounts',COMMUNITY_FUND_ACCOUNT_ID),issuerRef=ref('accounts',ISSUER_ACCOUNT_ID);
+        const [fund,issuer]=await Promise.all([tx.get(fundRef),tx.get(issuerRef)]);
+        if(!fund.exists())throw new Error('공동기금 계좌가 준비되지 않았습니다. 먼저 계좌를 준비해 주세요.');
+        if(!issuer.exists())throw new Error('발행 계좌가 준비되지 않았습니다. 먼저 계좌를 준비해 주세요.');
+        if(fund.data().balanceMinor<amountMinor)throw new Error('공동기금 잔액이 부족합니다.');
+        const description_=description.trim();
+        tx.set(ref('journals',journalId),{schoolId:context.schoolId,type:'FUND_EXPENSE',description:description_,debitAccountId:COMMUNITY_FUND_ACCOUNT_ID,creditAccountId:ISSUER_ACCOUNT_ID,amountMinor,postedBy:context.uid,schemaVersion:1,createdAt:serverTimestamp()});
+        const fundAfter=fund.data().balanceMinor-amountMinor;
+        tx.update(fundRef,{balanceMinor:fundAfter,version:fund.data().version+1,lastJournalId:journalId,updatedAt:serverTimestamp()});
+        tx.set(doc(collection(fundRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'FUND_EXPENSE',deltaMinor:-amountMinor,balanceAfterMinor:fundAfter,label:description_,postedAt:serverTimestamp()});
+        const issuerAfter=issuer.data().balanceMinor+amountMinor;
+        tx.update(issuerRef,{balanceMinor:issuerAfter,version:issuer.data().version+1,lastJournalId:journalId,updatedAt:serverTimestamp()});
+        tx.set(doc(collection(issuerRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'FUND_EXPENSE',deltaMinor:amountMinor,balanceAfterMinor:issuerAfter,label:`공동기금 지출 · ${description_}`,postedAt:serverTimestamp()});
+        tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'fund_expense',targetType:'journal',targetId:journalId,detail:`${description_} · ${amountMinor}`,createdAt:serverTimestamp()});
+      });
     },
   };
 }
