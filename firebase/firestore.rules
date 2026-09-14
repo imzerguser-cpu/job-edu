@@ -281,7 +281,9 @@ service cloud.firestore {
       // (instant, fully rule-validated self-service — see purchaseJournalShape below).
       function journalActorOk(j) {
         return (j.type=='SALARY' && teacher(sid))
-          || (j.type=='PURCHASE' && activeStudent(sid) && callerStudentId(sid)==j.buyerStudentId);
+          || (j.type=='PURCHASE' && activeStudent(sid) && callerStudentId(sid)==j.buyerStudentId)
+          || (j.type=='SAVINGS_DEPOSIT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
+          || (j.type=='INTEREST' && teacher(sid));
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -341,7 +343,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -414,6 +416,86 @@ service cloud.firestore {
           );
         allow delete: if false;
       }
+      function financialProductPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialProducts/$(id); }
+      function financialProductShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','kind','name','rateBpsMonthly','minMonths','maxMonths','minMinor','maxMinor','status','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','kind','name','rateBpsMonthly','minMonths','maxMonths','minMinor','maxMinor','status','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1 && d.kind=='savings'
+          && d.name is string && d.name.size()>0 && d.name.size()<=60
+          && d.rateBpsMonthly is int && d.rateBpsMonthly>=0 && d.rateBpsMonthly<=10000
+          && d.minMonths is int && d.maxMonths is int && d.minMonths>=1 && d.maxMonths<=120 && d.minMonths<=d.maxMonths
+          && d.minMinor is int && d.maxMinor is int && d.minMinor>=0 && d.maxMinor<=1000000000 && d.minMinor<=d.maxMinor
+          && d.status in ['active','closed']
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      // Savings products are teacher-configured (§17); no hard delete, only status:'closed' (D-11 pattern).
+      match /financialProducts/{productId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if teacher(sid) && productId.matches('^[A-Za-z0-9_-]{1,100}$') && financialProductShape() && request.resource.data.createdAt==request.time;
+        allow update: if teacher(sid) && financialProductShape() && request.resource.data.createdAt==resource.data.createdAt;
+        allow delete: if false;
+      }
+      function savingsPath(id) { return /databases/$(database)/documents/schools/$(sid)/savings/$(id); }
+      function savingsShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','studentId','productId','productSnapshot','principalMinor','months','startAt','maturityAt','status','depositJournalId','maturityJournalId','interestMinor','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','productId','productSnapshot','principalMinor','months','startAt','maturityAt','status','depositJournalId','maturityJournalId','interestMinor','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.productId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.productSnapshot.keys().hasOnly(['name','rateBpsMonthly'])
+          && d.productSnapshot.name is string && d.productSnapshot.rateBpsMonthly is int
+          && d.principalMinor is int && d.principalMinor>=0
+          && d.months is int && d.months>=1 && d.months<=120
+          && d.startAt is string && d.maturityAt is string
+          && d.status in ['active','matured']
+          && d.depositJournalId is string
+          && (d.maturityJournalId==null || d.maturityJournalId is string)
+          && (d.interestMinor==null || (d.interestMinor is int && d.interestMinor>=0))
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      // Savings enrollment is student self-service, trusted the same way PURCHASE is (D-23
+      // precedent): amount/months are re-checked against the live product here, and the rate is
+      // copied from the product doc, not the client, so it can't be forged. Interest itself is
+      // never computed at enrollment — only at maturity, inside the teacher-session settlement
+      // below — so this rule never needs to reimplement simpleInterest() in the rules language.
+      match /savings/{contractId} {
+        allow get: if teacher(sid) || ownStudent(sid,resource.data.studentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,resource.data.studentId));
+        allow create: if activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
+          && contractId.matches('^[A-Za-z0-9_-]{1,100}$') && savingsShape()
+          && request.resource.data.status=='active' && request.resource.data.maturityJournalId==null && request.resource.data.interestMinor==null
+          && request.resource.data.createdAt==request.time
+          && get(financialProductPath(request.resource.data.productId)).data.status=='active'
+          && request.resource.data.principalMinor>=get(financialProductPath(request.resource.data.productId)).data.minMinor
+          && request.resource.data.principalMinor<=get(financialProductPath(request.resource.data.productId)).data.maxMinor
+          && request.resource.data.months>=get(financialProductPath(request.resource.data.productId)).data.minMonths
+          && request.resource.data.months<=get(financialProductPath(request.resource.data.productId)).data.maxMonths
+          && request.resource.data.productSnapshot.rateBpsMonthly==get(financialProductPath(request.resource.data.productId)).data.rateBpsMonthly
+          && request.resource.data.depositJournalId==('savingsDeposit~'+contractId)
+          && getAfter(journalPath(request.resource.data.depositJournalId)).data.type=='SAVINGS_DEPOSIT'
+          && getAfter(journalPath(request.resource.data.depositJournalId)).data.amountMinor==request.resource.data.principalMinor
+          && getAfter(journalPath(request.resource.data.depositJournalId)).data.debitAccountId==request.resource.data.studentId
+          && getAfter(journalPath(request.resource.data.depositJournalId)).data.creditAccountId=='system-issuer';
+        // Maturity settlement (teacher session): a one-way active->matured transition tied to an
+        // INTEREST journal created in the same transaction. interestMinor is trusted from the
+        // teacher's app-computed value the same way job.salaryMinor is trusted for SALARY — the
+        // journal amount is still cross-checked against principal+interest so it can't drift.
+        allow update: if teacher(sid) && savingsShape()
+          && request.resource.data.studentId==resource.data.studentId && request.resource.data.productId==resource.data.productId
+          && request.resource.data.productSnapshot==resource.data.productSnapshot
+          && request.resource.data.principalMinor==resource.data.principalMinor && request.resource.data.months==resource.data.months
+          && request.resource.data.startAt==resource.data.startAt && request.resource.data.maturityAt==resource.data.maturityAt
+          && request.resource.data.depositJournalId==resource.data.depositJournalId && request.resource.data.createdAt==resource.data.createdAt
+          && resource.data.status=='active' && request.resource.data.status=='matured'
+          && request.resource.data.maturityJournalId==('interest~'+contractId)
+          && getAfter(journalPath(request.resource.data.maturityJournalId)).data.type=='INTEREST'
+          && getAfter(journalPath(request.resource.data.maturityJournalId)).data.amountMinor==request.resource.data.principalMinor+request.resource.data.interestMinor
+          && getAfter(journalPath(request.resource.data.maturityJournalId)).data.debitAccountId=='system-issuer'
+          && getAfter(journalPath(request.resource.data.maturityJournalId)).data.creditAccountId==resource.data.studentId;
+        allow delete: if false;
+      }
       function salaryJournalShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','type','jobId','studentId','period','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
@@ -437,6 +519,26 @@ service cloud.firestore {
           && d.postedBy==d.buyerStudentId
           && d.createdAt==request.time;
       }
+      function savingsDepositJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.contractId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.debitAccountId==d.studentId && d.creditAccountId=='system-issuer'
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000000
+          && d.postedBy==d.studentId && d.createdAt==request.time;
+      }
+      function interestJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','contractId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.contractId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.debitAccountId=='system-issuer' && d.creditAccountId==d.studentId
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       match /journals/{journalId} {
         allow get: if teacher(sid);
         allow list: if teacher(sid) && bounded();
@@ -445,6 +547,10 @@ service cloud.firestore {
         // Purchase: a random client id is fine since repeat purchases are expected; every fact
         // about the sale (price, stock, business/product active, buyer's balance) is re-read
         // and re-checked here at creation time rather than trusted from the client.
+        // Savings deposit: same self-service trust level as purchase (D-23) — id is derived from
+        // the contract id so it lines up with the getAfter check in the savings create rule.
+        // Interest: teacher-session settlement, id derived from contract id, the id itself being
+        // the idempotency key so a retried maturity settlement can never double-pay (D-18 pattern).
         allow create: if
           (teacher(sid) && salaryJournalShape() && request.resource.data.type=='SALARY'
             && journalId==('salary~'+request.resource.data.jobId+'~'+request.resource.data.studentId+'~'+request.resource.data.period)
@@ -459,7 +565,17 @@ service cloud.firestore {
             && get(productPath(request.resource.data.productId)).data.status=='active'
             && get(productPath(request.resource.data.productId)).data.stock>=1
             && get(productPath(request.resource.data.productId)).data.priceMinor==request.resource.data.amountMinor
-            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.buyerStudentId)).data.balanceMinor>=request.resource.data.amountMinor);
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.buyerStudentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          ||
+          (savingsDepositJournalShape() && request.resource.data.type=='SAVINGS_DEPOSIT'
+            && activeStudent(sid) && callerStudentId(sid)==request.resource.data.studentId
+            && journalId==('savingsDeposit~'+request.resource.data.contractId)
+            && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(request.resource.data.studentId)).data.balanceMinor>=request.resource.data.amountMinor)
+          ||
+          (teacher(sid) && interestJournalShape() && request.resource.data.type=='INTEREST'
+            && journalId==('interest~'+request.resource.data.contractId)
+            && get(savingsPath(request.resource.data.contractId)).data.studentId==request.resource.data.studentId
+            && get(savingsPath(request.resource.data.contractId)).data.status=='active');
         allow update, delete: if false;
       }
       function jobFieldsShape(f) {

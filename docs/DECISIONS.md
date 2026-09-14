@@ -164,6 +164,20 @@ Firebase Authentication의 이메일/비밀번호 로그인은 문자열이 이�
 **D-47. 서비스 계정 키는 앱 코드에 포함하지 않고, 사용자가 로컬에 내려받아 스크립트 실행 시에만 경로로 전달한다.**
 `*firebase-adminsdk*.json`, `serviceAccountKey*.json` 패턴을 `.gitignore`에 추가해 실수로 커밋되는 것을 막는다. 이 키는 프로젝트 전체에 대한 관리자 권한을 가지므로 채팅이나 저장소에 절대 붙여넣지 않는다.
 
+## 저축 1차 구현
+
+**D-48. 저축 가입은 구매(D-23)와 같은 신뢰 모델을 쓴다 — 은행원 검토 없이 학생이 즉시 실행한다.**
+원문 §20은 대출에 "은행원 검토 → 필요 시 교사 승인"을 명시하지만, 저축에는 그런 사람의 판단 단계를 요구하지 않는다(§13-19). 실제로 저축 가입은 원금·기간이 상품의 min/max 범위 안인지와 잔액이 충분한지만 확인하면 되고, 이는 Rules가 트랜잭션 안에서 그 자리에서 완전히 검증할 수 있다 — PURCHASE가 가격·재고·잔액을 그 자리에서 재검증하는 것과 동일한 성격이다(D-23). `financialRequests`/`financeReviews`(§5 표)는 이번에도 도입하지 않았다: 그 워크플로가 정말로 필요한 것은 사람의 판단이 들어가는 대출이며, 검증된 두 번째 구체 사례 없이 먼저 일반화하지 않는다는 D-17의 원칙을 그대로 따른다. 대출을 구현할 때 저축(첫 번째 구체 사례)과 대출(두 번째 구체 사례) 둘을 놓고 `financialRequests`의 실제 필요한 모양을 일반화한다.
+
+**D-49. 이자는 가입 시점이 아니라 만기 정산(교사 세션) 시점에만 계산·확정한다 — Rules 언어로 `simpleInterest()`를 재구현하지 않는다.**
+`simpleInterest()`(`src/domain/money.ts`)는 BigInt 기반 half-up 반올림을 쓰는 이미 테스트된 순수 함수다. 이를 Firestore Rules DSL(정수 연산, 반올림 규칙이 다를 수 있음)로 그대로 재현하려 하면 두 구현이 미묘하게 어긋날 위험이 있다. 대신 가입 시 Rules는 `productSnapshot.rateBpsMonthly`가 상품 문서의 실제 값과 정확히 일치하는지만 검증해 "가짜 이율"로 가입하는 것을 막고, 실제 이자 금액은 만기 정산 화면(기존 `previewSalary`/`settleSalary`와 정확히 같은 미리보기→확정 구조)에서 교사 세션의 앱 코드가 계산해 INTEREST journal에 쓴 뒤, Rules는 그 journal의 금액이 `저축 계약의 principalMinor + interestMinor`와 정확히 일치하는지만 대사(reconcile)한다. 이는 지금 SALARY가 `job.salaryMinor`를 그대로 신뢰하는 것과 동일한 신뢰 수준이며, 새로운 패턴이 아니다. 만기 전 정산 자체를 Rules가 막지는 않는다 — SALARY도 정산 월(period) 선택을 전적으로 교사 클라이언트에 맡기는 것과 같은 신뢰 수준이고, `previewMaturities()`가 만기 도래분만 나열해 정상적인 사용 경로에서는 애초에 문제되지 않는다.
+
+**D-50. 원장 거래 종류 `SAVINGS_DEPOSIT`(가입)·`INTEREST`(만기)를 `JournalType`에 좁게 추가한다 — 다형적 journal로 일반화하지 않는다.**
+D-17이 정한 대로, `journal.type`을 여전히 폐쇄 열거형으로 유지하고 허용 값만 늘린다. `SAVINGS_DEPOSIT`은 학생 계좌→`system-issuer`(원금이 학교의 저축 풀로 들어감), `INTEREST`는 `system-issuer`→학생 계좌(만기에 원금+이자 전액 반환)로, 기존 `creditedHere()`/`debitedHere()`의 `journalActorOk()` 기반 범용 로직을 그대로 재사용한다(추가 규칙 변경 없음) — SALARY/PURCHASE가 이미 증명한 debit=지불자/credit=수취자 패턴을 그대로 따르기 때문이다.
+
+**D-51. 만기 정산의 journal id(`interest~{contractId}`)는 D-18과 동일한 멱등키다.**
+가입 시 journal id는 `savingsDeposit~{contractId}`(contractId는 클라이언트가 만드는 fresh id — PURCHASE와 같은 신뢰 수준, 재시도 시 서로 다른 계약이 생기는 것을 감수한다). 반면 만기 정산의 journal id는 계약 id에서 결정적으로 파생되므로, 같은 계약을 두 번 정산하려는 시도(예: 오래된 미리보기 캐시로 재시도)는 이미 존재하는 journal을 다시 만들려는 시도가 되어 `allow update, delete: if false`에 걸려 조용히 실패한다 — `settleMaturities`는 이를 트랜잭션이 반환하는 `'skipped'` 결과로 구분해 카운트한다(단순히 `catch`로 흡수해 `paid`를 잘못 증가시키지 않도록, 기존 `settleSalary`의 카운팅 방식보다 한 단계 더 정확하게 만들었다).
+
 ## 문서화 방식
 
 **D-13. `docs/IMPLEMENTATION_PLAN.md`는 유지하고 새로 쓰지 않는다.**
