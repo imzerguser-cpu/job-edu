@@ -39,10 +39,11 @@ function usage(){
 function arg(name,def){const i=process.argv.indexOf(`--${name}`);return i>=0?process.argv[i+1]:def}
 function required(name){const v=arg(name);if(!v){console.error(`--${name}는 필수입니다.`);usage();process.exit(1)}return v}
 function normalizePart(v){return String(v).trim().replace(/\s+/g,'')}
+function canonicalSchoolCode(v){return normalizePart(v).replace(/(초등학교|초등|초)$/,'')}
 // Keep this in lockstep with src/domain/studentAuth.ts's studentLoginEmail.
 // Assumes grade+name is unique school-wide (one class per grade) — see D-44.
 function studentLoginEmail(schoolCode,grade,name){
-  const parts=[schoolCode,grade,name].map(normalizePart);
+  const parts=[canonicalSchoolCode(schoolCode),normalizePart(grade),normalizePart(name)];
   return `${parts.join('-')}@students.jobedu.local`;
 }
 function randomPassword(){return String(Math.floor(100000+Math.random()*900000))}

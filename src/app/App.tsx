@@ -76,7 +76,7 @@ function Login({onError}:{onError:(s:string)=>void}){
       </div>
       {mode==='student'
         ?<><h2>학생 로그인</h2><p>선생님께 안내받은 학교 코드와 비밀번호로 로그인해요. 이메일은 필요 없어요.</p>
-          <label>학교 코드<input name="schoolCode" defaultValue={defaultSchoolCode} autoComplete="off" required maxLength={40}/></label>
+          <label>학교 코드<input name="schoolCode" defaultValue={defaultSchoolCode} autoComplete="off" required maxLength={40} placeholder="예: 마동초 또는 마동초등학교"/></label>
           <label>학년<select name="grade" defaultValue="" required><option value="" disabled>학년 선택</option>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label>
           <label>이름<input name="name" autoComplete="username" required maxLength={40}/></label></>
         :<><h2>선생님 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p>

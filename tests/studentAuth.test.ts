@@ -22,4 +22,10 @@ describe('학생 로그인 이메일 합성',()=>{
     expect(()=>studentLoginEmail('jobedu','4','')).toThrow();
   });
   it('과도하게 긴 입력을 거부한다',()=>{expect(()=>studentLoginEmail('x'.repeat(41),'4','김민준')).toThrow()});
+  it('학교 코드는 초/초등/초등학교를 붙이거나 떼도 같은 학교로 인식한다',()=>{
+    const base=studentLoginEmail('마동','4','김민준');
+    expect(studentLoginEmail('마동초','4','김민준')).toBe(base);
+    expect(studentLoginEmail('마동초등학교','4','김민준')).toBe(base);
+    expect(studentLoginEmail(' 마동초등학교 ','4','김민준')).toBe(base);
+  });
 });
