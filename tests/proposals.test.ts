@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {
-  canVote,canClose,canDecide,passedVote,validateJobFields,validateBusinessFields,entityIdOf,
-  type JobProposalFields,type BusinessProposalFields,type Proposal,
+  canVote,canClose,canDecide,passedVote,validateJobFields,validateBusinessFields,validateSimpleFields,validateProposalComment,entityIdOf,
+  type JobProposalFields,type BusinessProposalFields,type SimpleProposalFields,type Proposal,
 } from '../src/domain/proposals';
 const jobFields=(over:Partial<JobProposalFields>={}):JobProposalFields=>({title:'번역가',purpose:'외국 친구를 도와요',tasks:'통역, 번역',beneficiary:'전학생',suggestedSalaryMinor:20000,tools:'사전',reason:'필요해요',...over});
 const bizFields=(over:Partial<BusinessProposalFields>={}):BusinessProposalFields=>({name:'분식집',product:'떡볶이',customers:'전교생',price:'500원',capital:'10000',staffNeeded:'2명',expectedRevenue:'많이',expectedCost:'재료비',advantages:'맛있음',risks:'재고 관리',...over});
@@ -50,4 +50,20 @@ describe('투표 통과 판정',()=>{
 });
 describe('승인 생성물 식별자',()=>{
   it('제안 ID에서 결정적으로 생성한다',()=>{expect(entityIdOf('p1')).toBe('proposal-p1');expect(entityIdOf('p1')).toBe(entityIdOf('p1'))});
+});
+describe('규칙/행사/학교개선 제안 필드 검증',()=>{
+  const simple=(over:Partial<SimpleProposalFields>={}):SimpleProposalFields=>({title:'실내화 착용 규칙',description:'복도에서도 실내화를 신어요',reason:'안전을 위해',...over});
+  it('필수 항목 누락을 거부한다',()=>{
+    expect(()=>validateSimpleFields(simple({title:''}))).toThrow();
+    expect(()=>validateSimpleFields(simple({description:''}))).toThrow();
+    expect(()=>validateSimpleFields(simple({reason:''}))).toThrow();
+  });
+  it('올바른 제안은 통과한다',()=>{expect(()=>validateSimpleFields(simple())).not.toThrow()});
+});
+describe('시민 의견(댓글) 검증',()=>{
+  it('빈 내용이나 과도한 길이를 거부한다',()=>{
+    expect(()=>validateProposalComment('')).toThrow();
+    expect(()=>validateProposalComment('x'.repeat(501))).toThrow();
+    expect(()=>validateProposalComment('좋은 생각이에요')).not.toThrow();
+  });
 });

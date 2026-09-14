@@ -953,18 +953,26 @@ service cloud.firestore {
           && f.advantages is string && f.advantages.size()<=1000
           && f.risks is string && f.risks.size()<=1000;
       }
+      function simpleFieldsShape(f) {
+        return f.keys().hasAll(['title','description','reason'])
+          && f.keys().hasOnly(['title','description','reason'])
+          && f.title is string && f.title.size()>0 && f.title.size()<=60
+          && f.description is string && f.description.size()>0 && f.description.size()<=1000
+          && f.reason is string && f.reason.size()>0 && f.reason.size()<=1000;
+      }
       function proposalFieldsShape(type,fields) {
-        return (type=='job' && jobFieldsShape(fields)) || (type=='business' && businessFieldsShape(fields));
+        return (type=='job' && jobFieldsShape(fields)) || (type=='business' && businessFieldsShape(fields))
+          || (type in ['rule','event','community'] && simpleFieldsShape(fields));
       }
       function proposalShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','type','authorStudentId','fields','status','deadlineAt','minParticipation','approvalThreshold','tallyYes','tallyNo','tallyTotal','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
           && d.keys().hasOnly(['schoolId','type','authorStudentId','fields','status','deadlineAt','minParticipation','approvalThreshold','tallyYes','tallyNo','tallyTotal','decisionNote','reviewerUid','createdEntityId','schemaVersion','createdAt','updatedAt'])
           && d.schoolId==sid && d.schemaVersion==1
-          && d.type in ['job','business']
+          && d.type in ['job','business','rule','event','community']
           && d.authorStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
           && proposalFieldsShape(d.type,d.fields)
-          && d.status in ['submitted','voting','closed','approved','rejected']
+          && d.status in ['draft','submitted','voting','closed','approved','rejected']
           && d.minParticipation is int && d.minParticipation>=0 && d.minParticipation<=100
           && d.approvalThreshold is int && d.approvalThreshold>=0 && d.approvalThreshold<=100
           && d.tallyYes is int && d.tallyYes>=0 && d.tallyNo is int && d.tallyNo>=0 && d.tallyTotal is int && d.tallyTotal>=0
@@ -974,45 +982,49 @@ service cloud.firestore {
           && (d.createdEntityId==null || d.createdEntityId is string)
           && d.createdAt is timestamp && d.updatedAt==request.time;
       }
+      // 'fields' is deliberately NOT pinned here — it must stay immutable through voting/tally/
+      // decide (each of those branches' own affectedKeys().hasOnly() already excludes it) but is
+      // exactly what a draft edit is allowed to change (D-75).
       function proposalUnchangedCore() {
         return request.resource.data.type==resource.data.type
           && request.resource.data.authorStudentId==resource.data.authorStudentId
-          && request.resource.data.fields==resource.data.fields
           && request.resource.data.createdAt==resource.data.createdAt;
       }
-      // Students submit job/business proposals with structured fields (never one free-text
-      // box — see D-27). Voting policy is teacher-set only when opening the vote, not at
-      // submission. A closed proposal's tally is teacher-computed from the votes subcollection
-      // (Rules cannot aggregate a subcollection) and trusted the same way other teacher-entered
-      // figures are; the vote documents themselves stay tamper-evident and one-per-account.
-      match /proposals/{proposalId} {
-        allow get: if active(sid);
-        allow list: if active(sid) && bounded();
-        allow create: if ownStudent(sid,request.resource.data.authorStudentId) && proposalShape()
-          && request.resource.data.status=='submitted'
-          && request.resource.data.deadlineAt==null
-          && request.resource.data.minParticipation==0 && request.resource.data.approvalThreshold==50
-          && request.resource.data.tallyYes==0 && request.resource.data.tallyNo==0 && request.resource.data.tallyTotal==0
-          && request.resource.data.decisionNote=='' && request.resource.data.reviewerUid==null && request.resource.data.createdEntityId==null
-          && request.resource.data.createdAt==request.time;
-        allow update: if proposalShape() && proposalUnchangedCore()
+      // Memoized the same way as journalCreateOk (D-73) — adding the two draft branches pushed
+      // this past Firestore's per-request expression budget too, with teacher(sid)/ownStudent(sid)
+      // each recomputed (own get()) across 6 branches.
+      function proposalUpdateOk(proposalId) {
+        let isTeacher = teacher(sid);
+        let isOwner = ownStudent(sid,resource.data.authorStudentId);
+        return proposalShape() && proposalUnchangedCore()
           && (
-            (teacher(sid) && resource.data.status=='submitted' && request.resource.data.status=='voting'
+            // Draft (§26 후속): only the author, only while still a draft. Editing keeps fields
+            // free to change; submitting locks it in (teacher takes over from here).
+            (isOwner && resource.data.status=='draft' && request.resource.data.status=='draft'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fields','updatedAt']))
+            ||
+            (isOwner && resource.data.status=='draft' && request.resource.data.status=='submitted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']))
+            ||
+            (isTeacher && resource.data.status=='submitted' && request.resource.data.status=='voting'
               && request.resource.data.deadlineAt is timestamp && request.resource.data.deadlineAt>request.time
               && request.resource.data.tallyYes==0 && request.resource.data.tallyNo==0 && request.resource.data.tallyTotal==0
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','deadlineAt','minParticipation','approvalThreshold','updatedAt']))
             ||
-            (teacher(sid) && resource.data.status=='voting' && request.resource.data.status=='closed'
+            (isTeacher && resource.data.status=='voting' && request.resource.data.status=='closed'
               && request.time>=resource.data.deadlineAt
               && request.resource.data.tallyTotal==request.resource.data.tallyYes+request.resource.data.tallyNo
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','tallyYes','tallyNo','tallyTotal','updatedAt']))
             ||
-            (teacher(sid) && resource.data.status=='closed' && request.resource.data.status in ['approved','rejected']
+            (isTeacher && resource.data.status=='closed' && request.resource.data.status in ['approved','rejected']
               && request.resource.data.reviewerUid==request.auth.uid
               && (request.resource.data.status=='approved' || request.resource.data.decisionNote.size()>0)
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','decisionNote','reviewerUid','createdEntityId','updatedAt'])
               && (
                 (request.resource.data.status=='rejected' && request.resource.data.createdEntityId==null)
+                ||
+                (request.resource.data.status=='approved' && resource.data.type in ['rule','event','community']
+                  && request.resource.data.createdEntityId==null)
                 ||
                 (request.resource.data.status=='approved' && request.resource.data.createdEntityId==('proposal-'+proposalId)
                   && (
@@ -1023,6 +1035,23 @@ service cloud.firestore {
                   ))
               ))
           );
+      }
+      // Students submit job/business proposals with structured fields (never one free-text
+      // box — see D-27). Voting policy is teacher-set only when opening the vote, not at
+      // submission. A closed proposal's tally is teacher-computed from the votes subcollection
+      // (Rules cannot aggregate a subcollection) and trusted the same way other teacher-entered
+      // figures are; the vote documents themselves stay tamper-evident and one-per-account.
+      match /proposals/{proposalId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if ownStudent(sid,request.resource.data.authorStudentId) && proposalShape()
+          && request.resource.data.status in ['draft','submitted']
+          && request.resource.data.deadlineAt==null
+          && request.resource.data.minParticipation==0 && request.resource.data.approvalThreshold==50
+          && request.resource.data.tallyYes==0 && request.resource.data.tallyNo==0 && request.resource.data.tallyTotal==0
+          && request.resource.data.decisionNote=='' && request.resource.data.reviewerUid==null && request.resource.data.createdEntityId==null
+          && request.resource.data.createdAt==request.time;
+        allow update: if proposalUpdateOk(proposalId);
         allow delete: if false;
         match /votes/{uid} {
           allow get: if teacher(sid) || request.auth.uid==uid;
@@ -1032,6 +1061,23 @@ service cloud.firestore {
             && request.resource.data.choice in ['yes','no'] && request.resource.data.createdAt==request.time
             && get(/databases/$(database)/documents/schools/$(sid)/proposals/$(proposalId)).data.status=='voting'
             && request.time<get(/databases/$(database)/documents/schools/$(sid)/proposals/$(proposalId)).data.deadlineAt;
+          allow update, delete: if false;
+        }
+        // Citizen comments (§26 후속): public discourse on a proposal, visible to the whole
+        // school like the proposal itself — never edited or deleted, matching journals/auditLogs.
+        function proposalCommentShape() {
+          let d=request.resource.data;
+          return d.keys().hasAll(['schoolId','authorUid','authorStudentId','text','createdAt'])
+            && d.keys().hasOnly(['schoolId','authorUid','authorStudentId','text','createdAt'])
+            && d.schoolId==sid && d.authorUid==request.auth.uid
+            && (d.authorStudentId==null || d.authorStudentId is string)
+            && d.text is string && d.text.size()>0 && d.text.size()<=500
+            && d.createdAt==request.time;
+        }
+        match /comments/{commentId} {
+          allow get: if active(sid);
+          allow list: if active(sid) && bounded();
+          allow create: if active(sid) && proposalCommentShape();
           allow update, delete: if false;
         }
       }
