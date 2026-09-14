@@ -335,4 +335,4 @@ RULE/EVENT/COMMUNITY 제안 종류, 초안(draft) 저장, 시민 의견(댓글)�
 
 핵심 설계 결정: 소득세는 **잔액(재산)이 아니라 그 정산월에 실제로 지급된 SALARY 저널의 합**을 과세 대상으로 삼는다 — "소득"세라는 이름 그대로이며, 학생이 여러 직업을 겸해도 정확히 과세된다. 이를 위해 `previewIncomeTax`는 이미 100건 한도로 자유롭게 읽어 온 SALARY 저널을 학생별로 합산해 재사용하며, `settleSalary`(이미 배포되어 실사용 중인 코드)는 전혀 건드리지 않는다 — 소득세는 월급 지급과 완전히 분리된, 그 뒤에 이어지는 별도 교사 세션 정산(미리보기→확정)이다. 세율은 학교 문서의 `incomeTaxRateBp`(0~20%, 교사만 설정) 필드에 저장하며, 걷은 세금은 새 시스템 계좌 `community-fund`(§17의 `system-issuer`와 같은 성격의 학교 전체 공유 계좌)로 들어간다. 원장 형태는 `SAVINGS_DEPOSIT`/`LOAN_REPAYMENT`가 쓰는 `studentToIssuerJournalShape`를 재사용하지 않고 `incomeTaxJournalShape`를 새로 만들었다 — 세금은 계약(contractId)이 아니라 SALARY처럼 정산월(period)에 묶이는 값이라 모양이 다르기 때문이다(D-17의 "성급한 일반화 금지" 원칙을 그대로 따름).
 
-기존 학교 문서에는 `incomeTaxRateBp` 필드가 아예 없으므로(과거 배포분), Rules는 이 필드를 `null`도 허용하고(D-33의 `lastJournalId==null` 패턴과 동일), 읽는 쪽(`schoolRepository.openSchool`)은 없으면 0으로 취급한다 — 필드 하나 추가를 위해 기존 학교를 backfill할 필요가 없다.
+기존 학교 문서에는 `incomeTaxRateBp` 필드가 아예 없으므로(과거 배포분), Rules는 이 필드를 `null`도 허용하고(D-33의 `lastJournalId==null` 패턴과 동일), 읽는 쪽(`schoolRepository.openSchool`)은 없으면 0으로 취급한다 — 필드 하나 추가를 위해 기존 학교를 backfill할 필요가 없다. 자세한 근거는 `docs/DECISIONS.md` D-59~D-62.
