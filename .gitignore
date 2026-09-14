@@ -9,6 +9,7 @@ serviceAccountKey*.json
 firebase-debug.log
 .firebase/
 .sites-runtime/
+.wrangler/
 prototype/
 private/
 coverage/

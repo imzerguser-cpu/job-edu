@@ -1,0 +1,7 @@
+name = "jobedu-admin"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "jobedu-5c8fb"
+ALLOWED_ORIGIN = "https://jobedu-5c8fb.web.app"
