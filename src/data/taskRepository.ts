@@ -94,7 +94,13 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
       await runTransaction(db,async tx=>{
         const target=ref('tasks',task.id),old=await tx.get(target);
         if(!old.exists()||old.data().status!=='submitted')throw new Error('이미 처리되었거나 제출되지 않은 업무입니다.');
-        if(old.data().verificationKind==='photo')tx.delete(ref('evidence',task.id));
+        if(old.data().verificationKind==='photo'){
+          tx.delete(ref('evidence',task.id));
+          // 사진은 원본을 지우지만(개인정보 최소 보관, D-37) "언제 몇 번째 시도가 어떻게
+          // 심사됐는지"는 이미 있는 auditLogs를 재사용해 기록에 남긴다 — 새 컬렉션/Rules 없이
+          // 기존 감사 로그 인프라와 화면(운영 현황 "최근 주요 활동")을 그대로 쓴다.
+          tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'photo_review',targetType:'task',targetId:task.id,detail:`${task.assigneeStudentId} · 시도 ${old.data().attempt} · ${approve?'승인':'다시 제출 요청'}${note?': '+note:''}`.slice(0,500),createdAt:serverTimestamp()});
+        }
         tx.update(target,{status:approve?'approved':'revision_requested',reviewNote:note,reviewerUid:context.uid,updatedAt:serverTimestamp()});
       });
     },

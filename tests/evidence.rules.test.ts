@@ -3,6 +3,7 @@ import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {doc,deleteDoc,getDoc,setDoc,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
 import {firestoreTasks} from '../src/data/taskRepository';
+import {firestoreAudit} from '../src/data/auditRepository';
 import {pairId,starterJobs} from '../src/domain/jobs';
 import type {SchoolContext} from '../src/domain/model';
 import type {TaskTemplate} from '../src/domain/tasks';
@@ -67,6 +68,20 @@ describe('사진 제출',()=>{
     const task=(await store('teacher').load()).tasks[0];
     await store('teacher').review(task,false,'다시 찍어 주세요');
     expect(await store('teacher').getEvidence(taskId)).toBeNull();
+  });
+  it('사진이 삭제된 뒤에도 몇 번째 시도가 어떻게 심사됐는지 감사 로그에 남는다',async()=>{
+    const taskId=await photoTask();
+    await store('student','a','one').submitPhoto(taskId,'image/jpeg',smallJpeg,'설명');
+    let task=(await store('teacher').load()).tasks[0];
+    await store('teacher').review(task,false,'다시 찍어 주세요');
+    await store('student','a','one').submitPhoto(taskId,'image/jpeg',smallJpeg,'다시 제출');
+    task=(await store('teacher').load()).tasks[0];
+    await store('teacher').review(task,true,'');
+    const logs=await firestoreAudit(db('teacher-a'),context('teacher')).loadRecent();
+    const photoLogs=logs.filter(l=>l.action==='photo_review');
+    expect(photoLogs).toHaveLength(2);
+    expect(photoLogs.some(l=>l.detail.includes('시도 1')&&l.detail.includes('다시 제출 요청'))).toBe(true);
+    expect(photoLogs.some(l=>l.detail.includes('시도 2')&&l.detail.includes('승인'))).toBe(true);
   });
 });
 describe('사진 접근 권한',()=>{

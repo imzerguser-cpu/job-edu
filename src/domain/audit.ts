@@ -7,4 +7,5 @@ export const auditActionNames:Record<string,string>={
   business_tax:'사업 세금 징수',
   fine_issued:'과태료 부과',
   fund_expense:'공동기금 지출',
+  photo_review:'사진 인증 심사',
 };
