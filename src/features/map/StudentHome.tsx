@@ -4,6 +4,9 @@ import type {School,SchoolContext,Student} from '../../domain/model';
 import type {CareerStore} from '../../data/careerRepository';
 import type {TaskStore} from '../../data/taskRepository';
 import type {FinanceStore} from '../../data/financeRepository';
+import type {SavingsStore} from '../../data/savingsRepository';
+import type {LoanStore} from '../../data/loanRepository';
+import type {FinancialProductStore} from '../../data/financialProductRepository';
 import type {BusinessStore} from '../../data/businessRepository';
 import type {ProposalStore} from '../../data/proposalRepository';
 import {CareerWorkspace} from '../jobs/CareerWorkspace';
@@ -16,7 +19,7 @@ import {BuildingShell} from './BuildingShell';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {buildings,type BuildingId} from './buildings';
 
-export function StudentHome({citizen,school,context,store,taskStore,financeStore,businessStore,proposalStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;businessStore:BusinessStore;proposalStore:ProposalStore}){
+export function StudentHome({citizen,school,context,store,taskStore,financeStore,savingsStore,loanStore,productStore,businessStore,proposalStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;businessStore:BusinessStore;proposalStore:ProposalStore}){
   const [view,setView]=useState<'map'|BuildingId>('map');
   const [jobCount,setJobCount]=useState<number|null>(null);
   useEffect(()=>{
@@ -38,7 +41,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
         <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
         <CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/></>
       :view==='bank'
-      ?<BankWorkspace store={financeStore} teacher={false} currencySymbol={school.currencyName}/>
+      ?<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>
       :view==='store'
       ?<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName}/>
       :<BuildingPlaceholder label={building.label}/>}
