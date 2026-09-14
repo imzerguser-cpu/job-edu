@@ -146,3 +146,19 @@ describe('공동기금 지출',()=>{
     await assertFails(setDoc(doc(db('a-one'),'schools/a/journals/fake-expense'),{schoolId:'a',type:'FUND_EXPENSE',description:'무단 지출',debitAccountId:'community-fund',creditAccountId:'system-issuer',amountMinor:100,postedBy:'a-one',schemaVersion:1,createdAt:serverTimestamp()}));
   });
 });
+describe('경제 통계',()=>{
+  it('학생·사업 계좌 잔액 합계로 유통량을 계산하고, 발행·공동기금 계좌는 제외한다',async()=>{
+    const teacher=await paySalary(); // "one" gets paid 50000
+    await teacher.ensureCommunityFund();
+    await teacher.settleIncomeTax(await teacher.previewIncomeTax('2026-09',500)); // 2500 tax → fund
+    const stats=await teacher.economicStats();
+    expect(stats.studentTotalMinor).toBe(47500); // 50000 - 2500
+    expect(stats.circulatingMinor).toBe(47500); // no business accounts seeded here
+    expect(stats.communityFundBalanceMinor).toBe(2500);
+    expect(stats.studentCount).toBeGreaterThanOrEqual(1);
+    expect(stats.avgStudentBalanceMinor).toBeGreaterThan(0);
+  });
+  it('학생은 경제 통계를 조회할 수 없다',async()=>{
+    await expect(store('student','a','one').economicStats()).rejects.toThrow();
+  });
+});

@@ -2,7 +2,7 @@ import {collection,doc,getDocFromServer,getDocsFromServer,limit,orderBy,query,ru
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant} from '../domain/jobs';
-import {COMMUNITY_FUND_ACCOUNT_ID,ISSUER_ACCOUNT_ID,computeIncomeTax,incomeTaxJournalId,salaryJournalId,validateFundExpenseAmount,validateFundExpenseDescription,type Account,type AccountEntry,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../domain/finance';
+import {COMMUNITY_FUND_ACCOUNT_ID,ISSUER_ACCOUNT_ID,computeIncomeTax,incomeTaxJournalId,salaryJournalId,validateFundExpenseAmount,validateFundExpenseDescription,type Account,type AccountEntry,type EconomicStats,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../domain/finance';
 export interface FinanceStore {
   ensureIssuer():Promise<void>;
   ensureCommunityFund():Promise<void>;
@@ -15,6 +15,7 @@ export interface FinanceStore {
   communityFundAccount():Promise<Account|null>;
   communityFundEntries():Promise<AccountEntry[]>;
   spendCommunityFund(description:string,amountMinor:number):Promise<void>;
+  economicStats():Promise<EconomicStats>;
 }
 export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -180,6 +181,26 @@ export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStor
         tx.set(doc(collection(issuerRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'FUND_EXPENSE',deltaMinor:amountMinor,balanceAfterMinor:issuerAfter,label:`공동기금 지출 · ${description_}`,postedAt:serverTimestamp()});
         tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'fund_expense',targetType:'journal',targetId:journalId,detail:`${description_} · ${amountMinor}`,createdAt:serverTimestamp()});
       });
+    },
+    // Reuses the existing accounts.list rule (teacher, bounded) — no new Rules or index needed.
+    // 'school'-owned accounts (issuer, community-fund) are institutional, not citizen wealth, so
+    // they're excluded from the circulating total.
+    async economicStats(){
+      teacher();
+      const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'accounts')),limit(100)));
+      const accounts=snap.docs.map(d=>d.data() as {ownerType:'student'|'school'|'business';ownerId:string;balanceMinor:number});
+      const students=accounts.filter(a=>a.ownerType==='student');
+      const businesses=accounts.filter(a=>a.ownerType==='business');
+      const studentTotalMinor=students.reduce((sum,a)=>sum+a.balanceMinor,0);
+      const businessTotalMinor=businesses.reduce((sum,a)=>sum+a.balanceMinor,0);
+      return {
+        circulatingMinor:studentTotalMinor+businessTotalMinor,
+        studentTotalMinor,businessTotalMinor,
+        studentCount:students.length,
+        avgStudentBalanceMinor:students.length?Math.round(studentTotalMinor/students.length):0,
+        issuerBalanceMinor:accounts.find(a=>a.ownerId===ISSUER_ACCOUNT_ID)?.balanceMinor??0,
+        communityFundBalanceMinor:accounts.find(a=>a.ownerId===COMMUNITY_FUND_ACCOUNT_ID)?.balanceMinor??0,
+      };
     },
   };
 }

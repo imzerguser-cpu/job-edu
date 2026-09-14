@@ -1,12 +1,15 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {EmailAuthProvider,reauthenticateWithCredential,updatePassword} from 'firebase/auth';
 import {auditActionNames,type AuditLog} from '../../domain/audit';
+import {formatMoney} from '../../domain/money';
+import type {EconomicStats} from '../../domain/finance';
 import type {Student} from '../../domain/model';
 import type {AuditStore} from '../../data/auditRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import type {TaskStore} from '../../data/taskRepository';
 import type {BusinessStore} from '../../data/businessRepository';
 import type {ProposalStore} from '../../data/proposalRepository';
+import type {FinanceStore} from '../../data/financeRepository';
 import {firebase} from '../../data/firebase';
 
 function readablePasswordError(error:unknown){
@@ -46,20 +49,22 @@ function PasswordSettings(){
   </form>;
 }
 
-export function OperationsWorkspace({auditStore,careerStore,taskStore,businessStore,proposalStore,students}:{
-  auditStore:AuditStore;careerStore:CareerStore;taskStore:TaskStore;businessStore:BusinessStore;proposalStore:ProposalStore;students:Student[];
+export function OperationsWorkspace({auditStore,careerStore,taskStore,businessStore,proposalStore,financeStore,students,currencySymbol='마동'}:{
+  auditStore:AuditStore;careerStore:CareerStore;taskStore:TaskStore;businessStore:BusinessStore;proposalStore:ProposalStore;financeStore:FinanceStore;students:Student[];currencySymbol?:string;
 }){
   const [logs,setLogs]=useState<AuditLog[]>([]);
   const [counts,setCounts]=useState<Record<string,number>|null>(null);
+  const [stats,setStats]=useState<EconomicStats|null>(null);
   const [loading,setLoading]=useState(true),[error,setError]=useState('');
   const mounted=useRef(true);
 
   useEffect(()=>{
     mounted.current=true;setLoading(true);
-    Promise.all([auditStore.loadRecent(),careerStore.load(),taskStore.load(),businessStore.loadCatalog(),proposalStore.loadProposals()])
-      .then(([auditLogs,career,tasks,catalog,proposals])=>{
+    Promise.all([auditStore.loadRecent(),careerStore.load(),taskStore.load(),businessStore.loadCatalog(),proposalStore.loadProposals(),financeStore.economicStats()])
+      .then(([auditLogs,career,tasks,catalog,proposals,economicStats])=>{
         if(!mounted.current)return;
         setLogs(auditLogs);
+        setStats(economicStats);
         setCounts({
           학생: students.length,
           '활동 중 학생': students.filter(s=>s.status==='active').length,
@@ -76,7 +81,7 @@ export function OperationsWorkspace({auditStore,careerStore,taskStore,businessSt
       .catch(e=>setError((e as Error).message))
       .finally(()=>{if(mounted.current)setLoading(false)});
     return()=>{mounted.current=false};
-  },[auditStore,careerStore,taskStore,businessStore,proposalStore,students]);
+  },[auditStore,careerStore,taskStore,businessStore,proposalStore,financeStore,students]);
 
   if(loading)return <p role="status">운영 현황을 불러오고 있어요.</p>;
 
@@ -84,6 +89,14 @@ export function OperationsWorkspace({auditStore,careerStore,taskStore,businessSt
     <div className="section-heading"><h2>운영 현황</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {counts&&<div className="kpis">{Object.entries(counts).map(([label,value])=><div key={label} className="kpi">{label}<b>{value}</b></div>)}</div>}
+    <h3 className="section">경제 통계</h3>
+    {stats&&<div className="kpis">
+      <div className="kpi">유통 중인 {currencySymbol}<b>{formatMoney(stats.circulatingMinor,currencySymbol)}</b></div>
+      <div className="kpi">학생 평균 잔액<b>{formatMoney(stats.avgStudentBalanceMinor,currencySymbol)}</b></div>
+      <div className="kpi">사업 계좌 합계<b>{formatMoney(stats.businessTotalMinor,currencySymbol)}</b></div>
+      <div className="kpi">공동기금 잔액<b>{formatMoney(stats.communityFundBalanceMinor,currencySymbol)}</b></div>
+    </div>}
+    <p className="muted">유통 중인 {currencySymbol}은 학생·사업 계좌 잔액의 합입니다(발행·공동기금 계좌는 시민 개인의 부가 아니라 제외). 최대 100개 계좌까지 집계합니다.</p>
     <h3 className="section">최근 주요 활동</h3>
     {!logs.length?<p className="empty">아직 기록된 활동이 없어요.</p>:<div className="list">{logs.map(l=><article key={l.id} className="task-row"><div className="task-row-head"><b>{auditActionNames[l.action]??l.action}</b><span className="badge">{l.targetType}</span></div><p className="muted">{l.detail}</p></article>)}</div>}
     <PasswordSettings/>

@@ -60,3 +60,11 @@ export function validateFundExpenseDescription(description:string){
 export function validateFundExpenseAmount(amountMinor:number){
   if(!Number.isInteger(amountMinor)||amountMinor<=0||amountMinor>1000000)throw new Error('지출 금액을 확인해 주세요.');
 }
+
+// 경제 통계(§23) — 학생·사업 계좌 잔액의 합계로 "지금 유통 중인 마동"을 구한다. 발행/공동기금
+// 계좌(ownerType:'school')는 시민 개인의 부가 아니라 제도 그 자체이므로 유통량에서 제외한다.
+export interface EconomicStats {
+  circulatingMinor:number;studentTotalMinor:number;businessTotalMinor:number;
+  studentCount:number;avgStudentBalanceMinor:number;
+  issuerBalanceMinor:number;communityFundBalanceMinor:number;
+}
