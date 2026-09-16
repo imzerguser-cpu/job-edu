@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
-import {doc,getDoc,setDoc,serverTimestamp,writeBatch,Timestamp,type Firestore} from 'firebase/firestore';
+import {doc,getDoc,setDoc,updateDoc,serverTimestamp,writeBatch,Timestamp,type Firestore} from 'firebase/firestore';
 import {firestoreLoans} from '../src/data/loanRepository';
 import {firestoreFinance} from '../src/data/financeRepository';
 import type {SchoolContext} from '../src/domain/model';
@@ -22,12 +22,20 @@ async function rawApproveLoan(uid:string,sid:string,requestId:string,opts:{stude
   batch.update(doc(d,`schools/${sid}/financialRequests/${requestId}`),{status:'approved',decisionNote:'승인',reviewerUid:uid,createdEntityId:requestId,updatedAt:serverTimestamp()});
   return batch.commit();
 }
-async function rawRepayLoan(uid:string,sid:string,contractId:string,studentId:string,amount:number){
-  const d=db(uid),journalId=`loanRepayment~${contractId}`;
+async function rawRepayLoan(uid:string,sid:string,contractId:string,studentId:string,opts:{amount:number;index:number;repaidBefore:number;totalOwed:number}){
+  const d=db(uid),journalId=`loanRepayment~${contractId}~${opts.index}`;
   const batch=writeBatch(d);
-  batch.set(doc(d,`schools/${sid}/journals/${journalId}`),{schoolId:sid,type:'LOAN_REPAYMENT',studentId,contractId,debitAccountId:studentId,creditAccountId:'system-issuer',amountMinor:amount,postedBy:studentId,schemaVersion:1,createdAt:serverTimestamp()});
-  batch.update(doc(d,`schools/${sid}/loans/${contractId}`),{status:'repaid',repaidMinor:amount,repaymentJournalId:journalId,updatedAt:serverTimestamp()});
+  const repaidAfter=opts.repaidBefore+opts.amount;
+  batch.set(doc(d,`schools/${sid}/journals/${journalId}`),{schoolId:sid,type:'LOAN_REPAYMENT',studentId,contractId,debitAccountId:studentId,creditAccountId:'system-issuer',amountMinor:opts.amount,postedBy:studentId,schemaVersion:1,createdAt:serverTimestamp()});
+  batch.update(doc(d,`schools/${sid}/loans/${contractId}`),{status:repaidAfter>=opts.totalOwed?'repaid':'active',repaidMinor:repaidAfter,repaymentCount:opts.index+1,repaymentJournalId:journalId,updatedAt:serverTimestamp()});
   return batch.commit();
+}
+// Replays an ALREADY-EXISTING repayment journal (no new journal write) to try to jump repaidMinor
+// forward without any new money moving — this must be blocked (D-92).
+async function rawReplayRepayment(uid:string,sid:string,contractId:string,existingJournalId:string,opts:{repaidAfter:number;repaymentCount:number;totalOwed:number}){
+  return updateDoc(doc(db(uid),`schools/${sid}/loans/${contractId}`),{
+    status:opts.repaidAfter>=opts.totalOwed?'repaid':'active',repaidMinor:opts.repaidAfter,repaymentCount:opts.repaymentCount,repaymentJournalId:existingJournalId,updatedAt:serverTimestamp(),
+  });
 }
 
 beforeAll(async()=>{env=await initializeTestEnvironment({projectId:'demo-little-society',firestore:{host:'127.0.0.1',port:8082,rules:readFileSync('firebase/firestore.rules','utf8')}})});
@@ -129,7 +137,7 @@ describe('대출 신청 → 검토 → 승인 → 상환 전체 흐름',()=>{
     expect(after).toMatchObject({status:'rejected',decisionNote:'예산 부족'});
     expect(await student.myLoans()).toHaveLength(0);
   });
-  it('상환 금액을 위조할 수 없고, 상환 후 다시 상환할 수 없다(중복 방지)',async()=>{
+  it('상환 저널 금액을 위조할 수 없고, 완제 후에는 다시 상환할 수 없다',async()=>{
     const student=loans('student','a','one');
     await student.submitRequest({productId:'short',principalMinor:5000,months:2,purpose:'교재 구입',repaymentPlan:'용돈으로 상환'});
     const [req]=await student.myRequests();
@@ -137,10 +145,56 @@ describe('대출 신청 → 검토 → 승인 → 상환 전체 흐름',()=>{
     await loans('student','a','two').submitReview(req.id,{studentActiveConfirmed:true,amountReasonable:true,noDuplicateLoan:true},'');
     await loans('teacher').decide(req.id,true,'승인');
     const [loan]=await student.myLoans();
-    await assertFails(rawRepayLoan('a-one','a',loan.id,'one',1)); // owes 5600, not 1
-    await student.repay(loan.id); // legitimate full payoff
-    await assertFails(rawRepayLoan('a-one','a',loan.id,'one',5600)); // journal id already exists -> blocked
+    // journal says 1 was paid but repaidMinor jumps by 5600 -> the amounts don't match, rejected
+    await assertFails(rawRepayLoan('a-one','a',loan.id,'one',{amount:1,index:0,repaidBefore:5600,totalOwed:5600}));
+    await student.repay(loan.id); // legitimate full payoff in one call
+    await assertFails(rawRepayLoan('a-one','a',loan.id,'one',{amount:5600,index:1,repaidBefore:0,totalOwed:5600})); // already 'repaid' — status precondition blocks it
     await expect(student.repay(loan.id)).rejects.toThrow(); // app-level guard too
+  });
+  it('여러 번에 나눠 상환할 수 있고, 다 갚으면 완제로 바뀐다(D-91)',async()=>{
+    const student=loans('student','a','one');
+    await student.submitRequest({productId:'short',principalMinor:5000,months:2,purpose:'교재 구입',repaymentPlan:'용돈으로 상환'});
+    const [req]=await student.myRequests();
+    await loans('teacher').assignReviewer(req.id,'two');
+    await loans('student','a','two').submitReview(req.id,{studentActiveConfirmed:true,amountReasonable:true,noDuplicateLoan:true},'');
+    await loans('teacher').decide(req.id,true,'승인');
+    const [loan]=await student.myLoans();
+    await student.repay(loan.id,2000);
+    let [after]=await student.myLoans();
+    expect(after).toMatchObject({status:'active',repaidMinor:2000});
+    await student.repay(loan.id,3600); // remaining exactly -> completes payoff
+    [after]=await student.myLoans();
+    expect(after).toMatchObject({status:'repaid',repaidMinor:5600});
+    const account=await finance('student','a','one').myAccount();
+    expect(account?.balanceMinor).toBe(10000-5600);
+  });
+  it('이미 존재하는 상환 저널을 재사용해 새 돈이 오가지 않고 완제로 위조할 수 없다(D-92)',async()=>{
+    const student=loans('student','a','one');
+    await student.submitRequest({productId:'short',principalMinor:5000,months:2,purpose:'교재 구입',repaymentPlan:'용돈으로 상환'});
+    const [req]=await student.myRequests();
+    await loans('teacher').assignReviewer(req.id,'two');
+    await loans('student','a','two').submitReview(req.id,{studentActiveConfirmed:true,amountReasonable:true,noDuplicateLoan:true},'');
+    await loans('teacher').decide(req.id,true,'승인');
+    const [loan]=await student.myLoans();
+    await student.repay(loan.id,2000); // legitimate partial payment -> creates loanRepayment~{id}~0
+    const afterFirst=await student.myLoans();
+    const existingJournalId=afterFirst[0].repaymentJournalId!;
+    // Replay that same, already-real journal to try to jump straight to full payoff with no new
+    // money moving — !exists(journalPath(...)) must reject this even though every field looks
+    // internally consistent (the journal's own amount was legitimate for the FIRST payment).
+    await assertFails(rawReplayRepayment('a-one','a',loan.id,existingJournalId,{repaidAfter:5600,repaymentCount:2,totalOwed:5600}));
+    const stillActive=await student.myLoans();
+    expect(stillActive[0]).toMatchObject({status:'active',repaidMinor:2000}); // untouched by the replay attempt
+  });
+  it('남은 금액보다 많이 상환할 수 없다',async()=>{
+    const student=loans('student','a','one');
+    await student.submitRequest({productId:'short',principalMinor:5000,months:2,purpose:'교재 구입',repaymentPlan:'용돈으로 상환'});
+    const [req]=await student.myRequests();
+    await loans('teacher').assignReviewer(req.id,'two');
+    await loans('student','a','two').submitReview(req.id,{studentActiveConfirmed:true,amountReasonable:true,noDuplicateLoan:true},'');
+    await loans('teacher').decide(req.id,true,'승인');
+    const [loan]=await student.myLoans();
+    await expect(student.repay(loan.id,6000)).rejects.toThrow();
   });
   it('다른 학교 신청·검토·대출에는 접근할 수 없다',async()=>{
     await assertFails(setDoc(doc(db('teacher-a'),'schools/b/financialRequests/hack'),{schoolId:'b',studentId:'one',operation:'LOAN',productId:'short',principalMinor:5000,months:2,purpose:'x',repaymentPlan:'y',status:'submitted',assignedStudentId:null,reviewNote:'',decisionNote:'',reviewerUid:null,createdEntityId:null,schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));

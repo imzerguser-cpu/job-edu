@@ -14,7 +14,7 @@ export interface LoanContract {
   id:string;schoolId:string;studentId:string;productId:string;
   productSnapshot:{name:string;rateBpsMonthly:number};
   principalMinor:number;months:number;interestMinor:number;totalOwedMinor:number;repaidMinor:number;
-  status:'active'|'repaid';disbursementJournalId:string;repaymentJournalId:string|null;
+  status:'active'|'repaid';disbursementJournalId:string;repaymentJournalId:string|null;repaymentCount:number;
   startAt:string;dueAt:string;schemaVersion:1;
 }
 
@@ -31,9 +31,15 @@ export function validateRepaymentPlan(s:string){if(!s.trim()||s.length>500)throw
 
 function validLoanId(id:string){if(!/^[A-Za-z0-9_-]{1,100}$/.test(id))throw new Error('대출 계약 식별자를 확인해 주세요.');return id}
 // Deterministic per-contract journal ids, same D-18/D-51 idempotency pattern as savings:
-// disbursement can only ever happen once per approved request, repayment only once per contract.
+// disbursement can only ever happen once per approved request. Repayment now supports multiple
+// partial payments (D-91), so its journal id is indexed by repaymentCount (0, 1, 2, ...) instead
+// of being a single one-shot id — each payment gets its own immutable journal.
 export function loanJournalId(contractId:string){return `loan~${validLoanId(contractId)}`}
-export function loanRepaymentJournalId(contractId:string){return `loanRepayment~${validLoanId(contractId)}`}
+export function loanRepaymentJournalId(contractId:string,index:number){return `loanRepayment~${validLoanId(contractId)}~${index}`}
+export function validRepaymentAmount(amountMinor:number,remainingMinor:number){
+  if(!Number.isInteger(amountMinor)||amountMinor<=0)throw new Error('상환 금액을 확인해 주세요.');
+  if(amountMinor>remainingMinor)throw new Error('남은 상환액보다 많이 낼 수 없습니다.');
+}
 
 export function defaultLoanProducts(schoolId:string):Omit<FinancialProduct,'id'>[]{
   return [

@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {doc,setDoc,getDoc,updateDoc,deleteDoc,collection,getDocs,query,limit,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
-import {importStudents} from '../src/data/schoolRepository';
+import {importStudents,listStudentsPage} from '../src/data/schoolRepository';
 let env:RulesTestEnvironment;
 const projectId='demo-little-society';
 const profile=(sid:string)=>({schoolId:sid,name:'가상학생',grade:1,className:null,citizenCode:'C-demo',schoolYear:2026,status:'active',schemaVersion:1,createdAt:Timestamp.now(),updatedAt:Timestamp.now()});
@@ -47,4 +47,31 @@ describe('명단 등록',()=>{
     expect((await getDocs(query(collection(db('teacher-a'),'schools/a/students'),limit(100)))).size).toBe(3);
   });
   it('서버 시각, 필드 종류, 학년 범위를 강제',async()=>{await assertFails(setDoc(doc(db('teacher-a'),'schools/a/students/x'),profile('a')));await assertFails(setDoc(doc(db('teacher-a'),'schools/a/students/x'),{...profile('a'),grade:7,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}))});
+});
+describe('대규모 명단 페이지 조회 (D-90)',()=>{
+  it('100명을 넘는 명단도 커서로 이어서 모두 조회하고, 겹치거나 빠지지 않는다',async()=>{
+    const context={schoolId:'a',uid:'teacher-a',membership:{schoolId:'a',role:'teacher' as const,studentId:null,status:'active' as const}};
+    await env.withSecurityRulesDisabled(async c=>{
+      const db=c.firestore();
+      const writes=[];
+      for(let i=0;i<130;i++){
+        const id=`bulk-${String(i).padStart(3,'0')}`;
+        writes.push(setDoc(doc(db,`schools/a/students/${id}`),{...profile('a'),name:id}));
+      }
+      await Promise.all(writes);
+    });
+    const first=await listStudentsPage(db('teacher-a'),context);
+    expect(first.students).toHaveLength(100);
+    expect(first.hasMore).toBe(true);
+    expect(first.cursor).not.toBeNull();
+    const second=await listStudentsPage(db('teacher-a'),context,first.cursor);
+    expect(second.students).toHaveLength(32); // 130 bulk + the 2 seeded in beforeEach
+    expect(second.hasMore).toBe(false);
+    const ids=new Set([...first.students,...second.students].map(s=>s.id));
+    expect(ids.size).toBe(132); // no duplicates across the two pages
+  });
+  it('학생은 전체 페이지 조회를 실행할 수 없다',async()=>{
+    const studentContext={schoolId:'a',uid:'a-one',membership:{schoolId:'a',role:'student' as const,studentId:'one',status:'active' as const}};
+    await expect(listStudentsPage(db('a-one'),studentContext)).rejects.toThrow();
+  });
 });

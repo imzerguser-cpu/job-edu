@@ -11,7 +11,9 @@
 .citizen-hotspot span{position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);opacity:0;pointer-events:none;background:#4d321b;color:#fff;padding:6px 10px;border-radius:10px;font-size:.8rem;font-weight:800;white-space:nowrap;transition:.15s}
 .citizen-hotspot:hover span,.citizen-hotspot:focus-visible span{opacity:1}
 .citizen-hud{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#fff;border:2px solid #f3d9ad;border-radius:20px;padding:12px 16px;box-shadow:0 6px 18px #28475b12}
+.citizen-hud-top{display:flex;align-items:center;gap:8px}
 .citizen-hud-eyebrow{font-size:.8rem;font-weight:800;color:#a86517;background:#fff3d7;border-radius:999px;padding:5px 10px}
+.citizen-hud .button.small{min-height:34px;padding:6px 12px;font-size:.8rem}
 .citizen-hud-profile{display:flex;align-items:center;gap:10px}
 .citizen-hud-avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-size:22px;background:var(--citizen-blue2)}
 .citizen-hud-profile b{display:block;font-size:1rem}
@@ -28,9 +30,23 @@
 .citizen-placeholder .muted{color:#6b81a0;font-size:.9rem}
 .citizen-building .task-row{background:var(--citizen-green2);border:1px solid #cdeed6;border-radius:16px}
 .citizen-building .badge{background:#fff3d7;color:#8b6217}
+.guide-steps{display:flex;flex-direction:column;gap:18px;padding-left:0;list-style:none;margin:0}
+.guide-steps li{background:var(--citizen-blue2);border-radius:16px;padding:14px;line-height:1.6;display:flex;flex-direction:column;gap:8px}
+.guide-steps li b{display:block;color:var(--citizen-ink);font-size:1.05rem}
+.guide-steps li span{color:var(--citizen-ink)}
+.guide-shot{width:100%;height:auto;border-radius:12px;border:1px solid #cfe0f2;box-shadow:0 4px 14px #28475b14;display:block}
+.guide-building-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.guide-building-row{background:#fff;border:1px solid var(--citizen-line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:4px}
+.guide-building-row b{color:var(--citizen-ink)}
+.guide-building-row span{color:var(--citizen-muted);font-size:.875rem}
+.guide-dept{margin-top:26px}
+.guide-dept:first-child{margin-top:0}
+.guide-dept h3{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+.guide-dept .count{background:#e7edfb;border-radius:12px;padding:2px 8px;font-size:.8rem;color:#3155db}
 @media(max-width:640px){
   .citizen-hud{padding:10px 12px;gap:10px}
   .citizen-hud-stat{width:100%;align-items:flex-start;margin-left:0}
   .citizen-building{padding:16px;border-radius:18px}
   .citizen-building-head h1{font-size:1.3rem}
+  .guide-building-list{grid-template-columns:1fr}
 }

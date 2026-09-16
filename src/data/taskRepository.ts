@@ -2,7 +2,7 @@ import {collection,deleteDoc,doc,getDocFromServer,getDocsFromServer,limit,query,
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant,pairId} from '../domain/jobs';
-import {canRestart,canSubmit,validateSubmission,validateTemplate,type Task,type TaskData,type TaskTemplate} from '../domain/tasks';
+import {canRestart,canSubmit,validateSubmission,validateTemplate,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry} from '../domain/tasks';
 import {EVIDENCE_EXPIRY_HOURS,validateEvidence,type Evidence} from '../domain/evidence';
 export interface TaskStore {
   load():Promise<TaskData>;
@@ -14,6 +14,7 @@ export interface TaskStore {
   review(task:Task,approve:boolean,note:string):Promise<void>;
   restart(task:Task):Promise<void>;
   purgeExpiredEvidence():Promise<number>;
+  submissionHistory(taskId:string):Promise<TaskSubmissionEntry[]>;
 }
 export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
   const ref=(name:string,id:string)=>doc(collection(db,schoolPath(context,name)),id);
@@ -61,7 +62,9 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
         const target=ref('tasks',taskId),old=await tx.get(target);
         if(!old.exists()||old.data().assigneeStudentId!==studentId)throw new Error('내 업무만 제출할 수 있습니다.');
         if(!canSubmit(old.data() as Task))throw new Error('지금 제출할 수 있는 상태가 아닙니다.');
-        tx.update(target,{status:'submitted',attempt:old.data().attempt+1,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
+        const attempt=old.data().attempt+1;
+        tx.update(target,{status:'submitted',attempt,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
+        tx.set(doc(collection(target,'submissions'),String(attempt)),{schoolId:context.schoolId,taskId,studentId,attempt,verificationKind:old.data().verificationKind,submissionText:trimmed,submittedAt:serverTimestamp()});
       });
     },
     async submitPhoto(taskId,mimeType,base64,caption){
@@ -74,8 +77,10 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
         if(!old.exists()||old.data().assigneeStudentId!==studentId)throw new Error('내 업무만 제출할 수 있습니다.');
         if(old.data().verificationKind!=='photo')throw new Error('사진 인증 업무가 아닙니다.');
         if(!canSubmit(old.data() as Task))throw new Error('지금 제출할 수 있는 상태가 아닙니다.');
+        const attempt=old.data().attempt+1;
         tx.set(ref('evidence',taskId),{schoolId:context.schoolId,studentId,taskId,mimeType,payloadBase64:base64,expiresAt,createdAt:serverTimestamp()});
-        tx.update(target,{status:'submitted',attempt:old.data().attempt+1,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
+        tx.update(target,{status:'submitted',attempt,submissionText:trimmed,reviewNote:'',reviewerUid:null,updatedAt:serverTimestamp()});
+        tx.set(doc(collection(target,'submissions'),String(attempt)),{schoolId:context.schoolId,taskId,studentId,attempt,verificationKind:old.data().verificationKind,submissionText:trimmed,submittedAt:serverTimestamp()});
       });
     },
     async getEvidence(taskId){
@@ -121,6 +126,13 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
       const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'evidence')),where('expiresAt','<',Timestamp.now()),limit(20)));
       await Promise.all(snap.docs.map(d=>deleteDoc(d.ref)));
       return snap.docs.length;
+    },
+    async submissionHistory(taskId){
+      const snap=await getDocsFromServer(query(collection(ref('tasks',taskId),'submissions'),limit(100)));
+      return snap.docs.map(d=>{
+        const raw=d.data();
+        return {id:d.id,schoolId:raw.schoolId,taskId:raw.taskId,studentId:raw.studentId,attempt:raw.attempt,verificationKind:raw.verificationKind,submissionText:raw.submissionText,submittedAt:raw.submittedAt?.toDate?.().toISOString()??''} as TaskSubmissionEntry;
+      }).sort((a,b)=>a.attempt-b.attempt);
     },
   };
 }

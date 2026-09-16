@@ -1,0 +1,29 @@
+/* Shared visual layer; business logic and existing form behavior are unchanged. */
+:root{--blue:#27745d;--line:#dfe7df;color:#253e36;background:#f5f7f1}
+.header{border-bottom-color:#e0e7dc}.brand-mark{background:#2e7b61;border-radius:14px;box-shadow:0 3px 0 #1f5946}
+.eyebrow{color:#387661}.primary{background:#28755b}.secondary{background:#eaf3ec;color:#28664e}
+.button{transition:background .16s,box-shadow .16s}.button:hover:not(:disabled){box-shadow:0 3px 10px #25433318}.button.primary:hover:not(:disabled){background:#1f624b}
+.panel{border-color:#e0e7df;box-shadow:0 5px 20px #334d3505}.welcome h1{color:#264e3d}.journey span{background:#e7efe3;color:#446247}
+.login-grid .tabs{display:flex;gap:6px;background:#f0f4ec;padding:6px;border-radius:14px;margin-bottom:26px}
+.login-grid .tab{flex:1;border:0;background:transparent;color:#647265;padding:12px;border-radius:10px;font-weight:700;min-height:44px}
+.login-grid .tab.active{background:#fff;color:#27674e;box-shadow:0 2px 6px #2b4c3510}
+.workspace-tabs button[aria-pressed=true]{color:#27674e;border-bottom-color:#398164}.workspace-tabs span{background:#e8f0e6}
+.department-filters button[aria-pressed=true]{background:#edf5e9;border-color:#498266;color:#285b44}
+.job-card{box-shadow:0 4px 16px #32492e05}.job-card .job-icon{width:76px;height:76px}.job-card h2{color:#2c463b}
+.citizen-hud{border-color:#dae6ce;background:#fffef8;box-shadow:0 5px 18px #3d532909;padding:20px 24px}
+.citizen-hud-avatar{width:56px;height:60px;object-fit:contain;background:transparent;border-radius:0}.citizen-hud-profile b{font-size:1.1rem}
+.citizen-hud-stat{background:#eef4e7;border-radius:12px;padding:12px 18px}.citizen-hud-stat b{color:#326843}
+.citizen-explore{display:grid;gap:20px}.map-intro{display:flex;align-items:end;justify-content:space-between;gap:16px}.map-intro .eyebrow{margin-bottom:7px;font-size:.8rem}.map-intro h2{font-size:1.6rem}.map-intro p{font-size:.875rem;margin:0}
+.citizen-map{border:5px solid #fff;border-radius:24px;box-shadow:0 10px 32px #2f4d3212}.citizen-hotspot:focus-visible{outline:4px solid #ffe28c;outline-offset:-4px;background:#fff3}.citizen-hotspot:focus-visible span{opacity:1}
+.destination-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.destination{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #dce5d7;border-radius:16px;background:#fff;color:#294535;font-weight:700;min-height:82px;text-align:left;box-shadow:0 3px 0 #e6ebdf;transition:background .15s,transform .15s}
+.destination:hover{background:#f0f6e9;transform:translateY(-2px)}.destination img{width:48px;height:54px;object-fit:contain;flex-shrink:0}.destination-arrow{margin-left:auto;color:#6c8468;font-size:.8rem}
+.destination-economy{border-color:#e5d6ad}.destination-media{border-color:#ccdcec}.destination-culture{border-color:#e1d3e8}.destination-home{background:#f1f6e9}
+.citizen-building{border-color:#dfe7d9;padding:24px}.citizen-building-head{border-bottom:1px solid #e2e9dc;padding-bottom:24px;margin-bottom:26px}.building-title{flex:1}.building-icon{width:88px;height:88px;object-fit:contain}.citizen-building-sub{max-width:640px;line-height:1.7}.citizen-back{background:#eff5e8;border-color:#d4e2c9;color:#366449;min-height:44px}
+.section-heading h2,.citizen-building h3{color:#2b483b}
+.icon-heading{display:flex;align-items:center;gap:12px;margin-bottom:16px;line-height:1.5}.section-heading .icon-heading{margin-bottom:0}.function-icon{width:44px;height:44px;object-fit:contain;flex-shrink:0}
+.destination-icon{display:inline-block;width:56px;height:56px;object-fit:contain;flex-shrink:0}.destination-sprite{background-image:url('/assets/icons/destinations-v2.png');background-size:300% 300%;background-repeat:no-repeat}.destination-icon.building-icon{width:88px;height:88px}.destination-icon.function-icon{width:44px;height:44px}
+@media(max-width:900px){.destination-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.map-intro{align-items:start;flex-direction:column;gap:6px}}
+@media(max-width:600px){.destination-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.destination{min-height:76px;padding:10px}.destination img{width:44px;height:48px}.citizen-hud{padding:16px}.citizen-building{padding:16px}.citizen-building-head{flex-wrap:wrap;gap:12px}.citizen-back{order:-2}.building-title{flex-basis:calc(100% - 80px)}.building-icon{width:62px;height:62px}.map-intro h2{font-size:1.35rem}.citizen-map{border-width:3px;border-radius:16px}.header{flex-wrap:wrap}.header-actions{flex-wrap:wrap}}
+@media(prefers-reduced-motion:reduce){.destination,.button{transition:none}.destination:hover{transform:none}}
+@media(max-width:600px){.destination{gap:8px;font-size:.9rem}.destination .destination-icon{width:48px;height:48px}.destination-arrow{display:none}.destination-icon.building-icon{width:62px;height:62px}}

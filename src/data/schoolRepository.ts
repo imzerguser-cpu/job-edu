@@ -1,8 +1,9 @@
-import {collection,doc,getDocFromServer,getDocsFromServer,query,limit,orderBy,runTransaction,serverTimestamp,updateDoc} from 'firebase/firestore';
+import {collection,doc,getDocFromServer,getDocsFromServer,query,limit,orderBy,startAfter,runTransaction,serverTimestamp,updateDoc} from 'firebase/firestore';
 import type {Firestore,QueryDocumentSnapshot,DocumentData} from 'firebase/firestore';
 import {isTeacher,schoolPath,validateId,type Membership,type School,type SchoolContext,type Student} from '../domain/model';
 import {validateIncomeTaxRateBp} from '../domain/finance';
 import {validateBusinessTaxRateBp} from '../domain/business';
+import {validateDepartmentNames} from '../domain/jobs';
 import type {RosterRow} from '../domain/roster';
 export async function listSchools(db:Firestore,uid:string){
   validateId(uid);const snap=await getDocsFromServer(query(collection(db,`userSchools/${uid}/links`),limit(50)));
@@ -16,7 +17,7 @@ export async function openSchool(db:Firestore,uid:string,schoolId:string){
   if(membership.status!=='active'||membership.schoolId!==schoolId||!['student','teacher','owner'].includes(membership.role))throw new Error('학교 이용 권한이 없습니다.');
   const school=await getDocFromServer(doc(db,`schools/${schoolId}`));
   if(!school.exists()||school.data().status!=='active')throw new Error('현재 이용할 수 없는 학교입니다.');
-  return {context:{schoolId,uid,membership} satisfies SchoolContext,school:{...school.data(),incomeTaxRateBp:school.data().incomeTaxRateBp??0,businessTaxRateBp:school.data().businessTaxRateBp??0} as School};
+  return {context:{schoolId,uid,membership} satisfies SchoolContext,school:{...school.data(),incomeTaxRateBp:school.data().incomeTaxRateBp??0,businessTaxRateBp:school.data().businessTaxRateBp??0,departmentNames:school.data().departmentNames??{}} as School};
 }
 export async function getCitizen(db:Firestore,context:SchoolContext){
   const id=context.membership.studentId;if(!id)throw new Error('연결된 시민 프로필이 없습니다.');
@@ -27,6 +28,18 @@ export async function listStudents(db:Firestore,context:SchoolContext){
   if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
   const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'students')),orderBy('name'),limit(100)));
   return snap.docs.map(d=>({...d.data(),id:d.id} as Student));
+}
+export interface StudentPage {students:Student[];cursor:QueryDocumentSnapshot<DocumentData>|null;hasMore:boolean}
+// Cursor pagination (D-90) needs no Rules changes — students.list is capped at <=100 per page
+// regardless of a startAfter() cursor, so each page is its own bounded, rule-compliant query.
+// Kept separate from listStudents() rather than replacing it, since several existing screens
+// only ever want "the first 100, no more" and don't carry pagination UI.
+export async function listStudentsPage(db:Firestore,context:SchoolContext,after:QueryDocumentSnapshot<DocumentData>|null=null):Promise<StudentPage>{
+  if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
+  const constraints=[orderBy('name'),...(after?[startAfter(after)]:[]),limit(100)];
+  const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'students')),...constraints));
+  const students=snap.docs.map(d=>({...d.data(),id:d.id} as Student));
+  return {students,cursor:snap.docs.at(-1)??null,hasMore:snap.docs.length===100};
 }
 // Any active member (student or teacher) may see who else is in the class — needed so a student
 // can pick a target when reporting a rule violation (§24). Filters to 'active' client-side rather
@@ -56,6 +69,14 @@ export async function updateBusinessTaxRate(db:Firestore,context:SchoolContext,r
   if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
   validateId(context.schoolId);validateBusinessTaxRateBp(rateBp);
   await updateDoc(doc(db,`schools/${context.schoolId}`),{businessTaxRateBp:rateBp,updatedAt:serverTimestamp()});
+}
+// Empty string clears an override back to the shared template name (departmentDisplayName falls
+// through to the default whenever the stored value is empty/absent) — schools rename their own
+// 4 국 without any new collection, following the same nullable-field pattern as the tax rates.
+export async function updateDepartmentNames(db:Firestore,context:SchoolContext,names:School['departmentNames']){
+  if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
+  validateId(context.schoolId);validateDepartmentNames(names);
+  await updateDoc(doc(db,`schools/${context.schoolId}`),{departmentNames:names,updatedAt:serverTimestamp()});
 }
 export interface PlannedStudent extends RosterRow {id:string;citizenCode:string}
 export function planImport(rows:RosterRow[]):PlannedStudent[]{return rows.map(r=>{const id=crypto.randomUUID();return {...r,id,citizenCode:`C-${id}`}})}

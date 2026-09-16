@@ -12,6 +12,13 @@ service cloud.firestore {
     function ownStudent(sid,studentId) { return active(sid) && get(memberPath(sid)).data.role == 'student' && get(memberPath(sid)).data.studentId == studentId; }
     function activeStudent(sid) { return active(sid) && get(memberPath(sid)).data.role == 'student'; }
     function callerStudentId(sid) { return get(memberPath(sid)).data.studentId; }
+    // "YYYY-MM-DD" -> has that UTC date's midnight already passed? Used to stop a savings
+    // contract from being settled before its own maturityAt — the preview screen already filters
+    // by date, but that's app-level only; this is the actual enforcement (D-84).
+    function dateReached(dateStr) {
+      let parts = dateStr.split('-');
+      return request.time >= timestamp.date(int(parts[0]), int(parts[1]), int(parts[2]));
+    }
     function studentShape(sid) {
       let d = request.resource.data;
       return d.keys().hasAll(['schoolId','name','grade','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
@@ -33,7 +40,7 @@ service cloud.firestore {
       allow get: if active(sid);
       allow list, create, delete: if false;
       allow update: if teacher(sid)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','incomeTaxRateBp','businessTaxRateBp','updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schoolName','communityName','currencyName','currencySymbol','incomeTaxRateBp','businessTaxRateBp','departmentNames','updatedAt'])
         && request.resource.data.schoolName is string && request.resource.data.schoolName.size() > 0 && request.resource.data.schoolName.size() <= 80
         && request.resource.data.communityName is string && request.resource.data.communityName.size() > 0 && request.resource.data.communityName.size() <= 80
         && request.resource.data.currencyName is string && request.resource.data.currencyName.size() > 0 && request.resource.data.currencyName.size() <= 20
@@ -43,6 +50,16 @@ service cloud.firestore {
         // throw ("Property X is undefined on object"), not evaluate to null (D-66).
         && (request.resource.data.get('incomeTaxRateBp',null) == null || (request.resource.data.get('incomeTaxRateBp',null) is int && request.resource.data.get('incomeTaxRateBp',null) >= 0 && request.resource.data.get('incomeTaxRateBp',null) <= 2000))
         && (request.resource.data.get('businessTaxRateBp',null) == null || (request.resource.data.get('businessTaxRateBp',null) is int && request.resource.data.get('businessTaxRateBp',null) >= 0 && request.resource.data.get('businessTaxRateBp',null) <= 2000))
+        // Per-school 국 name overrides (D-85) — same nullable pattern; when present, must be a
+        // complete map of all 4 department ids (matches what updateDepartmentNames() always sends).
+        && (request.resource.data.get('departmentNames',null) == null || (
+          request.resource.data.departmentNames.keys().hasAll(['economy','media','life','culture'])
+          && request.resource.data.departmentNames.keys().hasOnly(['economy','media','life','culture'])
+          && request.resource.data.departmentNames.economy is string && request.resource.data.departmentNames.economy.size() <= 20
+          && request.resource.data.departmentNames.media is string && request.resource.data.departmentNames.media.size() <= 20
+          && request.resource.data.departmentNames.life is string && request.resource.data.departmentNames.life.size() <= 20
+          && request.resource.data.departmentNames.culture is string && request.resource.data.departmentNames.culture.size() <= 20
+        ))
         && request.resource.data.updatedAt == request.time;
       match /members/{uid} {
         allow get: if active(sid) && (request.auth.uid == uid || teacher(sid));
@@ -81,10 +98,11 @@ service cloud.firestore {
       }
       function jobPath(id) { return /databases/$(database)/documents/schools/$(sid)/jobs/$(id); }
       function assignmentPath(id) { return /databases/$(database)/documents/schools/$(sid)/jobAssignments/$(id); }
+      function applicationPath(id) { return /databases/$(database)/documents/schools/$(sid)/jobApplications/$(id); }
       function jobShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','departmentId','name','description','core','status','recommendedGrades','icon','salaryMinor','schemaVersion','createdAt','updatedAt'])
-          && d.keys().hasOnly(['schoolId','departmentId','name','description','core','status','recommendedGrades','icon','salaryMinor','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','departmentId','name','description','core','status','recommendedGrades','icon','salaryMinor','capacity','activeAssignmentCount','schemaVersion','createdAt','updatedAt'])
           && d.schoolId==sid && d.schemaVersion==1 && d.core is bool
           && d.departmentId in ['economy','media','life','culture']
           && d.name is string && d.name.size()>0 && d.name.size()<=60
@@ -95,6 +113,10 @@ service cloud.firestore {
           && d.recommendedGrades.hasOnly([1,2,3,4,5,6])
           && d.icon in ['banker','tax_accounting','store_manager','cafe_worker','real_estate','business_manager','journalist','photographer','writer','webtoon_artist','painter','digital_manager','dj','library_manager','environment_manager','plant_manager','safety_manager','rules_manager','milk_delivery','parcel_delivery','school_notice','noticeboard_manager','event_planner','music','singer','dancer','board_game','culture_play']
           && d.salaryMinor is int && d.salaryMinor>=0 && d.salaryMinor<=1000000
+          // Nullable/optional (D-88): jobs created before capacity existed have neither key, and
+          // stay valid forever without a migration — same .get(key,default) pattern as D-66.
+          && (d.get('capacity',null)==null || (d.get('capacity',null) is int && d.get('capacity',null)>=1 && d.get('capacity',null)<=300))
+          && d.get('activeAssignmentCount',0) is int && d.get('activeAssignmentCount',0)>=0
           && d.createdAt is timestamp && d.updatedAt==request.time;
       }
       match /jobs/{jobId} {
@@ -123,17 +145,49 @@ service cloud.firestore {
           && request.resource.data.status=='submitted' && request.resource.data.reviewNote==''
           && request.resource.data.reviewerUid==null && request.resource.data.reviewedAt==null
           && request.resource.data.submittedAt==request.time;
-        allow update: if teacher(sid) && resource.data.status=='submitted'
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewNote','reviewerUid','reviewedAt'])
-          && request.resource.data.reviewNote is string && request.resource.data.reviewNote.size()<=500
-          && request.resource.data.reviewerUid==request.auth.uid && request.resource.data.reviewedAt==request.time
-          && ((request.resource.data.status=='rejected' && request.resource.data.reviewNote.size()>0)
-            || (request.resource.data.status=='approved'
-              && get(jobPath(resource.data.jobId)).data.status in ['recruiting','active']
-              && getAfter(assignmentPath(applicationId)).data.status=='active'
-              && getAfter(assignmentPath(applicationId)).data.studentId==resource.data.studentId
-              && getAfter(assignmentPath(applicationId)).data.jobId==resource.data.jobId));
+        allow update: if
+          (teacher(sid) && resource.data.status=='submitted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewNote','reviewerUid','reviewedAt'])
+            && request.resource.data.reviewNote is string && request.resource.data.reviewNote.size()<=500
+            && request.resource.data.reviewerUid==request.auth.uid && request.resource.data.reviewedAt==request.time
+            && ((request.resource.data.status=='rejected' && request.resource.data.reviewNote.size()>0)
+              || (request.resource.data.status=='approved'
+                && get(jobPath(resource.data.jobId)).data.status in ['recruiting','active']
+                && getAfter(assignmentPath(applicationId)).data.status=='active'
+                && getAfter(assignmentPath(applicationId)).data.studentId==resource.data.studentId
+                && getAfter(assignmentPath(applicationId)).data.jobId==resource.data.jobId)))
+          // Resubmission after rejection (D-86): same doc id reused, student-owned, only from
+          // 'rejected'. apply() archives the rejected attempt into history/ in the same
+          // transaction, but that archive is validated by its own create rule below, not here.
+          || (ownStudent(sid,resource.data.studentId) && resource.data.status=='rejected'
+            && request.resource.data.schoolId==sid && request.resource.data.schemaVersion==1
+            && request.resource.data.jobId==resource.data.jobId && request.resource.data.studentId==resource.data.studentId
+            && request.resource.data.status=='submitted'
+            && request.resource.data.reason is string && request.resource.data.reason.size()>0 && request.resource.data.reason.size()<=500
+            && request.resource.data.reviewNote=='' && request.resource.data.reviewerUid==null && request.resource.data.reviewedAt==null
+            && request.resource.data.submittedAt==request.time
+            && get(jobPath(resource.data.jobId)).data.status=='recruiting'
+            && (!exists(assignmentPath(applicationId)) || get(assignmentPath(applicationId)).data.status!='active'));
         allow delete: if false;
+      }
+      match /jobApplications/{applicationId}/history/{historyId} {
+        allow get: if teacher(sid) || pairOwner(applicationId);
+        allow list: if bounded() && (teacher(sid) || pairOwner(applicationId));
+        // Only the resubmitting student can archive their own just-overwritten rejected attempt,
+        // and only as an exact snapshot of what the application doc held right before this write.
+        allow create: if ownStudent(sid,request.resource.data.studentId)
+          && request.resource.data.keys().hasAll(['schoolId','jobId','studentId','reason','status','reviewNote','reviewerUid','submittedAt','reviewedAt','schemaVersion'])
+          && request.resource.data.keys().hasOnly(['schoolId','jobId','studentId','reason','status','reviewNote','reviewerUid','submittedAt','reviewedAt','schemaVersion'])
+          && request.resource.data.schoolId==sid && request.resource.data.schemaVersion==1
+          && request.resource.data.status=='rejected'
+          && request.resource.data.jobId==get(applicationPath(applicationId)).data.jobId
+          && request.resource.data.studentId==get(applicationPath(applicationId)).data.studentId
+          && request.resource.data.reason==get(applicationPath(applicationId)).data.reason
+          && request.resource.data.reviewNote==get(applicationPath(applicationId)).data.reviewNote
+          && request.resource.data.reviewerUid==get(applicationPath(applicationId)).data.reviewerUid
+          && request.resource.data.submittedAt==get(applicationPath(applicationId)).data.submittedAt
+          && request.resource.data.reviewedAt==get(applicationPath(applicationId)).data.reviewedAt;
+        allow update, delete: if false;
       }
       function assignmentShape(id) {
         let d=request.resource.data;
@@ -147,7 +201,21 @@ service cloud.firestore {
         let d=request.resource.data;
         return assignmentShape(id) && d.status=='active' && d.startAt==request.time && d.endAt==null
           && d.assignedBy==request.auth.uid && get(jobPath(d.jobId)).data.status in ['recruiting','active']
-          && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active';
+          && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active'
+          // Capacity (D-88): checked against the job's count as of the start of this transaction;
+          // the job's own counter update (assign()'s companion tx.update on the job doc) is what
+          // actually serializes two concurrent assigns racing for the last open seat.
+          && (get(jobPath(d.jobId)).data.get('capacity',null)==null
+            || get(jobPath(d.jobId)).data.get('activeAssignmentCount',0) < get(jobPath(d.jobId)).data.get('capacity',null))
+          && getAfter(jobPath(d.jobId)).data.get('activeAssignmentCount',0) == get(jobPath(d.jobId)).data.get('activeAssignmentCount',0) + 1;
+      }
+      // Clamped at 0, matching end()'s own Math.max(0,activeCount-1) — a job whose counter is
+      // already 0 (every job that existed before capacity/counters shipped, until a teacher
+      // happens to re-save it) must still be able to end an active assignment instead of being
+      // permanently stuck demanding an impossible -1.
+      function assignmentEndedOk(jobId) {
+        let oldCount=get(jobPath(jobId)).data.get('activeAssignmentCount',0);
+        return getAfter(jobPath(jobId)).data.get('activeAssignmentCount',0)==(oldCount>0?oldCount-1:0);
       }
       match /jobAssignments/{assignmentId} {
         allow get: if teacher(sid) || pairOwner(assignmentId);
@@ -157,8 +225,26 @@ service cloud.firestore {
           && request.resource.data.jobId==resource.data.jobId && request.resource.data.studentId==resource.data.studentId
           && ((resource.data.status=='ended' && newAssignment(assignmentId))
             || (resource.data.status=='active' && request.resource.data.status=='ended' && request.resource.data.endAt==request.time
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endAt','updatedAt'])));
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endAt','updatedAt'])
+              && assignmentEndedOk(resource.data.jobId)));
         allow delete: if false;
+      }
+      match /jobAssignments/{assignmentId}/history/{historyId} {
+        allow get: if teacher(sid) || pairOwner(assignmentId);
+        allow list: if bounded() && (teacher(sid) || pairOwner(assignmentId));
+        // Only end() writes these, archiving the period that just closed — the shape must match
+        // the assignment doc's own pre-image exactly, and the assignment must actually have just
+        // transitioned to 'ended' in this same transaction (D-88).
+        allow create: if teacher(sid)
+          && request.resource.data.keys().hasAll(['schoolId','jobId','studentId','startAt','endAt','schemaVersion'])
+          && request.resource.data.keys().hasOnly(['schoolId','jobId','studentId','startAt','endAt','schemaVersion'])
+          && request.resource.data.schoolId==sid && request.resource.data.schemaVersion==1
+          && request.resource.data.jobId==get(assignmentPath(assignmentId)).data.jobId
+          && request.resource.data.studentId==get(assignmentPath(assignmentId)).data.studentId
+          && request.resource.data.startAt==get(assignmentPath(assignmentId)).data.startAt
+          && request.resource.data.endAt==request.time
+          && getAfter(assignmentPath(assignmentId)).data.status=='ended';
+        allow update, delete: if false;
       }
       function taskTemplatePath(id) { return /databases/$(database)/documents/schools/$(sid)/taskTemplates/$(id); }
       function templateShape() {
@@ -237,6 +323,25 @@ service cloud.firestore {
               && get(assignmentPath(resource.data.jobId+'~'+resource.data.assigneeStudentId)).data.status=='active')
           );
         allow delete: if false;
+      }
+      // One immutable snapshot per submit attempt (D-89) — the task doc itself keeps only the
+      // latest submissionText, overwritten on resubmission. Doc id is the attempt number itself
+      // (as a string), so it's naturally one-entry-per-attempt with no separate idempotency key.
+      match /tasks/{taskId}/submissions/{attempt} {
+        allow get: if teacher(sid) || ownStudent(sid,get(taskPath(taskId)).data.assigneeStudentId);
+        allow list: if bounded() && (teacher(sid) || ownStudent(sid,get(taskPath(taskId)).data.assigneeStudentId));
+        allow create: if ownStudent(sid,get(taskPath(taskId)).data.assigneeStudentId)
+          && request.resource.data.keys().hasAll(['schoolId','taskId','studentId','attempt','verificationKind','submissionText','submittedAt'])
+          && request.resource.data.keys().hasOnly(['schoolId','taskId','studentId','attempt','verificationKind','submissionText','submittedAt'])
+          && request.resource.data.schoolId==sid
+          && request.resource.data.taskId==taskId
+          && request.resource.data.studentId==get(taskPath(taskId)).data.assigneeStudentId
+          && request.resource.data.verificationKind==get(taskPath(taskId)).data.verificationKind
+          && int(attempt)==getAfter(taskPath(taskId)).data.attempt
+          && request.resource.data.attempt==getAfter(taskPath(taskId)).data.attempt
+          && request.resource.data.submissionText==getAfter(taskPath(taskId)).data.submissionText
+          && request.resource.data.submittedAt==request.time;
+        allow update, delete: if false;
       }
       function taskPath(id) { return /databases/$(database)/documents/schools/$(sid)/tasks/$(id); }
       function evidenceShape() {
@@ -515,6 +620,7 @@ service cloud.firestore {
           && request.resource.data.startAt==resource.data.startAt && request.resource.data.maturityAt==resource.data.maturityAt
           && request.resource.data.depositJournalId==resource.data.depositJournalId && request.resource.data.createdAt==resource.data.createdAt
           && resource.data.status=='active' && request.resource.data.status=='matured'
+          && dateReached(resource.data.maturityAt)
           && request.resource.data.maturityJournalId==('interest~'+contractId)
           && getAfter(journalPath(request.resource.data.maturityJournalId)).data.type=='INTEREST'
           && getAfter(journalPath(request.resource.data.maturityJournalId)).data.amountMinor==request.resource.data.principalMinor+request.resource.data.interestMinor
@@ -683,14 +789,18 @@ service cloud.firestore {
             && get(financialRequestPath(d.contractId)).data.studentId==d.studentId
             && get(financialRequestPath(d.contractId)).data.principalMinor==d.amountMinor)
           ||
-          // Loan repayment: self-service full payoff, same trust tier as SAVINGS_DEPOSIT/PURCHASE —
-          // amount must equal exactly the contract's outstanding total, not a client-chosen figure.
+          // Loan repayment: self-service, same trust tier as SAVINGS_DEPOSIT/PURCHASE. One or more
+          // partial payments (D-91) are allowed now, so the journal id carries a running index
+          // (loanRepayment~{contractId}~{n}) instead of being single-shot — the exact amount for
+          // a given payment is still cross-checked against the loan doc's own update in the same
+          // tx (loanRepaymentOk), not re-derived here; this only bounds it so it can never exceed
+          // the outstanding total and never drive the student's balance negative.
           (studentToIssuerJournalShape() && d.type=='LOAN_REPAYMENT'
             && isActiveStudent && myStudentId==d.studentId
-            && journalId==('loanRepayment~'+d.contractId)
+            && journalId.matches('^loanRepayment~'+d.contractId+'~[0-9]+$')
             && get(loanPath(d.contractId)).data.studentId==d.studentId
             && get(loanPath(d.contractId)).data.status=='active'
-            && get(loanPath(d.contractId)).data.totalOwedMinor==d.amountMinor
+            && d.amountMinor<=get(loanPath(d.contractId)).data.totalOwedMinor
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
           // Income tax: teacher-session settlement (like SALARY/INTEREST), amount trusted from
@@ -833,7 +943,7 @@ service cloud.firestore {
       function loanShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','studentId','productId','productSnapshot','principalMinor','months','interestMinor','totalOwedMinor','repaidMinor','status','disbursementJournalId','repaymentJournalId','startAt','dueAt','schemaVersion','createdAt','updatedAt'])
-          && d.keys().hasOnly(['schoolId','studentId','productId','productSnapshot','principalMinor','months','interestMinor','totalOwedMinor','repaidMinor','status','disbursementJournalId','repaymentJournalId','startAt','dueAt','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','productId','productSnapshot','principalMinor','months','interestMinor','totalOwedMinor','repaidMinor','status','disbursementJournalId','repaymentJournalId','repaymentCount','startAt','dueAt','schemaVersion','createdAt','updatedAt'])
           && d.schoolId==sid && d.schemaVersion==1
           && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.productId.matches('^[A-Za-z0-9_-]{1,100}$')
           && d.productSnapshot.keys().hasOnly(['name','rateBpsMonthly'])
@@ -842,12 +952,55 @@ service cloud.firestore {
           && d.months is int && d.months>=1 && d.months<=120
           && d.interestMinor is int && d.interestMinor>=0
           && d.totalOwedMinor is int && d.totalOwedMinor==d.principalMinor+d.interestMinor
-          && d.repaidMinor is int && d.repaidMinor>=0
+          && d.repaidMinor is int && d.repaidMinor>=0 && d.repaidMinor<=d.totalOwedMinor
           && d.status in ['active','repaid']
           && d.disbursementJournalId is string
           && (d.repaymentJournalId==null || d.repaymentJournalId is string)
+          // repaymentCount (D-91) is intentionally unvalidated here — it's a client-side
+          // bookkeeping convenience for building a unique per-payment journal id, not a security
+          // invariant (journal immutability + the repaidMinor/amount checks below already fully
+          // guarantee no payment can be skipped, forged, or double-counted). Every extra
+          // expression in this shape is spent from the same ~1000-expression budget repay()'s
+          // transaction shares with the journal/account/entry writes in the same commit, which
+          // was already tight before D-91 (see loanRepaymentOk) — so this stays a bare "allowed
+          // key", not a validated one.
           && d.startAt is string && d.dueAt is string
           && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      // Repayment (D-91), split out as its own function and memoized (D-73/D-78/D-84 pattern):
+      // this transaction already touches loans+journals+2 accounts+2 entries, so re-evaluating
+      // getAfter(journal)/repaymentCount redundantly (once per field access) was enough on its own
+      // to blow the ~1000-expression request budget — each expensive value is computed once here
+      // and reused, with zero change to which writes are actually allowed.
+      function loanRepaymentOk() {
+        let d=request.resource.data;
+        let old=resource.data;
+        let payingOff=d.repaidMinor==d.totalOwedMinor;
+        let journal=getAfter(journalPath(d.repaymentJournalId)).data;
+        // !exists(...) (pre-transaction state) is the load-bearing check added here — it forces
+        // repaymentJournalId to name a journal newly created in THIS transaction, not an old
+        // (already-processed payment's) journal replayed to fake a repaidMinor jump. Without it,
+        // an attacker could point repaymentJournalId at a real prior payment's journal, whose
+        // already-stored amount happens to match a forged repaidMinor delta, and mark the loan
+        // 'repaid' without any new money ever moving — getAfter() alone just re-reads whatever
+        // already sits at that path, it doesn't prove this write is what created it.
+        return ownStudent(sid,old.studentId) && loanShape()
+          && d.studentId==old.studentId && d.productId==old.productId
+          && d.productSnapshot==old.productSnapshot
+          && d.principalMinor==old.principalMinor && d.months==old.months
+          && d.interestMinor==old.interestMinor && d.totalOwedMinor==old.totalOwedMinor
+          && d.disbursementJournalId==old.disbursementJournalId
+          && d.startAt==old.startAt && d.dueAt==old.dueAt
+          && d.createdAt==old.createdAt
+          && old.status=='active'
+          && d.repaidMinor>old.repaidMinor && d.repaidMinor<=d.totalOwedMinor
+          && d.status==(payingOff?'repaid':'active')
+          && d.repaymentJournalId is string
+          && !exists(journalPath(d.repaymentJournalId))
+          && journal.type=='LOAN_REPAYMENT'
+          && journal.amountMinor==d.repaidMinor-old.repaidMinor
+          && journal.debitAccountId==old.studentId
+          && journal.creditAccountId=='system-issuer';
       }
       // Doc id == the approved financialRequests id, so a loan contract is always the unique
       // product of exactly one approval (D-30-style deterministic id, re-used here).
@@ -864,23 +1017,12 @@ service cloud.firestore {
           && get(financialRequestPath(contractId)).data.status=='reviewed'
           && get(financialRequestPath(contractId)).data.studentId==request.resource.data.studentId
           && get(financialRequestPath(contractId)).data.productId==request.resource.data.productId;
-        // Repayment: the owning student only, active->repaid once, full payoff only (no partial
-        // repayment yet — docs/DECISIONS.md D-52), tied to a LOAN_REPAYMENT journal in the same tx.
-        allow update: if ownStudent(sid,resource.data.studentId) && loanShape()
-          && request.resource.data.studentId==resource.data.studentId && request.resource.data.productId==resource.data.productId
-          && request.resource.data.productSnapshot==resource.data.productSnapshot
-          && request.resource.data.principalMinor==resource.data.principalMinor && request.resource.data.months==resource.data.months
-          && request.resource.data.interestMinor==resource.data.interestMinor && request.resource.data.totalOwedMinor==resource.data.totalOwedMinor
-          && request.resource.data.disbursementJournalId==resource.data.disbursementJournalId
-          && request.resource.data.startAt==resource.data.startAt && request.resource.data.dueAt==resource.data.dueAt
-          && request.resource.data.createdAt==resource.data.createdAt
-          && resource.data.status=='active' && request.resource.data.status=='repaid'
-          && request.resource.data.repaidMinor==request.resource.data.totalOwedMinor
-          && request.resource.data.repaymentJournalId==('loanRepayment~'+contractId)
-          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.type=='LOAN_REPAYMENT'
-          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.amountMinor==request.resource.data.totalOwedMinor
-          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.debitAccountId==resource.data.studentId
-          && getAfter(journalPath(request.resource.data.repaymentJournalId)).data.creditAccountId=='system-issuer';
+        // One or more partial payments until repaidMinor reaches totalOwedMinor, each tied to its
+        // own LOAN_REPAYMENT journal in the same tx (deterministic id includes the running
+        // repaymentCount, so no two payments can ever collide — journals are create-only
+        // elsewhere in this file, so reusing an id fails outright). Early full payoff in one call
+        // still works exactly as before — it's just the amount==remaining case of the same rule.
+        allow update: if loanRepaymentOk();
         allow delete: if false;
       }
       function violationReportShape() {

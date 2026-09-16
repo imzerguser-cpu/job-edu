@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {taskStatusNames,verificationKindNames,type Task,type TaskData,type TaskTemplate,type VerificationKind} from '../../domain/tasks';
+import {taskStatusNames,verificationKindNames,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry,type VerificationKind} from '../../domain/tasks';
 import type {Evidence} from '../../domain/evidence';
 import type {Career} from '../../domain/jobs';
 import type {Student} from '../../domain/model';
@@ -7,7 +7,7 @@ import type {TaskStore} from '../../data/taskRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import {compressImageToBase64} from '../../ui/imageCompress';
 
-export function TaskWorkspace({taskStore,careerStore,teacher,students}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string}){
+export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string;iconFilter?:string[]}){
   const [data,setData]=useState<TaskData>({templates:[],tasks:[]});
   const [jobs,setJobs]=useState<Career[]>([]);
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
@@ -45,6 +45,10 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students}:{taskStor
   const templateTitle=(id:string)=>data.templates.find(t=>t.id===id)?.title??id;
   const jobName=(id:string)=>jobs.find(j=>j.id===id)?.name??id;
   const studentName=(id:string)=>students.find(s=>s.id===id)?.name??'현재 명단 밖의 시민';
+  // A building on the student map scopes this to just its own jobs' tasks (StudentHome passes
+  // iconFilter) — mirrors CareerWorkspace's iconFilter, using the jobs already loaded above.
+  const scopedJobIds=iconFilter?new Set(jobs.filter(j=>iconFilter.includes(j.icon)).map(j=>j.id)):null;
+  const myTasks=scopedJobIds?data.tasks.filter(t=>scopedJobIds.has(t.jobId)):data.tasks;
 
   if(loading)return <p role="status">업무를 불러오고 있어요.</p>;
 
@@ -52,10 +56,11 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students}:{taskStor
     return <section className="citizen-tasks">
       <h2>오늘의 업무</h2>
       {error&&<p role="alert" className="error">{error}</p>}{message&&<p role="status" className="success">{message}</p>}
-      {!data.tasks.length?<p className="empty">아직 배정된 업무가 없어요.</p>:<div className="list">
-        {data.tasks.map(task=><article key={task.id} className="task-row">
+      {!myTasks.length?<p className="empty">{scopedJobIds?'이 건물에서 할 업무가 아직 없어요.':'아직 배정된 업무가 없어요.'}</p>:<div className="list">
+        {myTasks.map(task=><article key={task.id} className="task-row">
           <div className="task-row-head"><b>{templateTitle(task.templateId)}</b><span className="badge">{taskStatusNames[task.status]}</span></div>
           {task.reviewNote&&<p className="review-note">선생님 의견: {task.reviewNote}</p>}
+          {task.attempt>0&&<TaskSubmissionHistoryButton taskStore={taskStore} taskId={task.id}/>}
           {(task.status==='assigned'||task.status==='revision_requested')&&(submittingTask?.id===task.id
             ?<form className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget),caption=String(f.get('text'));
                 void run(()=>task.verificationKind==='photo'?submitPhotoTask(task,caption):taskStore.submit(task.id,caption),'제출했습니다. 선생님의 확인을 기다려 주세요.')}}>
@@ -109,6 +114,7 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students}:{taskStor
         <h4>{templateTitle(t.templateId)} · {studentName(t.assigneeStudentId)}</h4>
         {t.verificationKind==='photo'&&<ReviewPhoto taskStore={taskStore} taskId={t.id}/>}
         <p className="review-note">{t.submissionText}</p>
+        {t.attempt>1&&<TaskSubmissionHistoryButton taskStore={taskStore} taskId={t.id}/>}
         <label>의견(다시 제출 요청 시 필수)<textarea name="note" maxLength={500} rows={2}/></label>
         <div className="header-actions"><button className="button primary" value="approve" disabled={busy}>승인</button><button className="button quiet" value="revise" disabled={busy}>다시 제출 요청</button></div>
       </form>)}</div>}
@@ -116,6 +122,20 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students}:{taskStor
   </section>;
 }
 
+function TaskSubmissionHistoryButton({taskStore,taskId}:{taskStore:TaskStore;taskId:string}){
+  const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[entries,setEntries]=useState<TaskSubmissionEntry[]|null>(null);
+  async function toggle(){
+    if(open){setOpen(false);return}
+    setOpen(true);
+    if(entries)return;
+    setBusy(true);
+    try{setEntries(await taskStore.submissionHistory(taskId))}catch{setEntries([])}
+    finally{setBusy(false)}
+  }
+  return <span className="history-toggle"><button type="button" className="button quiet" onClick={toggle}>{open?'이전 제출 이력 닫기':'이전 제출 이력'}</button>
+    {open&&(busy?<p className="muted">불러오는 중…</p>:entries&&entries.length?<ul className="history-list">{entries.map(e=><li key={e.id}>{e.attempt}차 제출({new Date(e.submittedAt).toLocaleString('ko-KR')}): {e.submissionText}</li>)}</ul>:<p className="muted">이전 제출 기록이 없어요.</p>)}
+  </span>;
+}
 function ReviewPhoto({taskStore,taskId}:{taskStore:TaskStore;taskId:string}){
   const [evidence,setEvidence]=useState<Evidence|null|'loading'>('loading');
   useEffect(()=>{let alive=true;taskStore.getEvidence(taskId).then(e=>{if(alive)setEvidence(e)}).catch(()=>{if(alive)setEvidence(null)});return()=>{alive=false}},[taskStore,taskId]);

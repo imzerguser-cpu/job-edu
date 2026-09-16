@@ -6,6 +6,7 @@ import type {SchoolContext,Student} from '../../domain/model';
 import type {BusinessStore} from '../../data/businessRepository';
 import {updateBusinessTaxRate} from '../../data/schoolRepository';
 import {firebase} from '../../data/firebase';
+import {FunctionIcon} from '../../ui/FunctionIcon';
 
 export function StoreWorkspace({store,teacher,students,currencySymbol='마동',studentId,context,businessTaxRateBp=0}:{store:BusinessStore;teacher:boolean;students:Student[];currencySymbol?:string;studentId?:string;context?:SchoolContext;businessTaxRateBp?:number}){
   const [catalog,setCatalog]=useState<Catalog>({businesses:[],products:[]});
@@ -31,7 +32,7 @@ export function StoreWorkspace({store,teacher,students,currencySymbol='마동',s
   if(loading)return <p role="status">상점을 불러오고 있어요.</p>;
 
   return <section className="citizen-tasks">
-    <div className="section-heading"><h2>{teacher?'사업 운영':'마동시장'}</h2>{teacher&&<button className="button primary" onClick={()=>setCreatingBusiness(true)}>+ 사업 만들기</button>}</div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="store"/>{teacher?'사업 운영':'마동시장'}</h2>{teacher&&<button className="button primary" onClick={()=>setCreatingBusiness(true)}>+ 사업 만들기</button>}</div>
     {error&&<p role="alert" className="error">{error}</p>}{message&&<p role="status" className="success">{message}</p>}
     {creatingBusiness&&<form className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>store.createBusiness(String(f.get('name')),String(f.get('owner'))),'사업을 만들었습니다.')}}>
       <label>사업 이름<input autoFocus name="name" required maxLength={60}/></label>
@@ -121,7 +122,7 @@ function TeacherBusinessTax({store,context,initialRateBp,currencySymbol}:{store:
   const payable=items?.filter(i=>!i.alreadyPaid)??[];
   const total=payable.reduce((sum,i)=>sum+i.amountMinor,0);
   return <div className="section">
-    <div className="section-heading"><h2>사업 세금</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="tax"/>사업 세금</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {result&&<p role="status" className="success">징수 완료 {result.paid}건 · 이미 징수됨 {result.skipped}건 · 실패 {result.failed}건</p>}
     <div className="assignment-form">

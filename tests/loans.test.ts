@@ -2,7 +2,7 @@ import {describe,it,expect} from 'vitest';
 import {simpleInterest} from '../src/domain/money';
 import {
   canAssign,canDecide,canReject,canReview,defaultLoanProducts,
-  loanJournalId,loanRepaymentJournalId,validatePurpose,validateRepaymentPlan,
+  loanJournalId,loanRepaymentJournalId,validatePurpose,validateRepaymentPlan,validRepaymentAmount,
   type FinancialRequest,
 } from '../src/domain/loans';
 
@@ -64,12 +64,25 @@ describe('기본 대출 상품',()=>{
   });
 });
 describe('대출 저널 식별자',()=>{
-  it('계약마다 결정적인 실행·상환 식별자를 만든다(중복 방지)',()=>{
+  it('계약마다 결정적인 실행 식별자를 만든다(중복 방지)',()=>{
     expect(loanJournalId('c1')).toBe('loan~c1');
-    expect(loanRepaymentJournalId('c1')).toBe('loanRepayment~c1');
     expect(loanJournalId('c1')).not.toBe(loanJournalId('c2'));
+  });
+  it('상환은 회차마다 서로 다른 결정적 식별자를 만든다(분할 상환마다 새 저널)',()=>{
+    expect(loanRepaymentJournalId('c1',0)).toBe('loanRepayment~c1~0');
+    expect(loanRepaymentJournalId('c1',1)).toBe('loanRepayment~c1~1');
+    expect(loanRepaymentJournalId('c1',0)).not.toBe(loanRepaymentJournalId('c1',1));
   });
   it('잘못된 계약 식별자는 거부한다',()=>{
     expect(()=>loanJournalId('c1~x')).toThrow();
+  });
+});
+describe('분할 상환 금액 검증(D-91)',()=>{
+  it('0 이하이거나 남은 금액을 넘는 상환은 거부한다',()=>{
+    expect(()=>validRepaymentAmount(0,10000)).toThrow();
+    expect(()=>validRepaymentAmount(-1,10000)).toThrow();
+    expect(()=>validRepaymentAmount(10001,10000)).toThrow();
+    expect(()=>validRepaymentAmount(5000,10000)).not.toThrow();
+    expect(()=>validRepaymentAmount(10000,10000)).not.toThrow();
   });
 });

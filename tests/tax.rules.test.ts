@@ -3,7 +3,7 @@ import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,assertSucceeds,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
 import {doc,setDoc,updateDoc,serverTimestamp,Timestamp,type Firestore} from 'firebase/firestore';
 import {firestoreFinance} from '../src/data/financeRepository';
-import {openSchool,updateIncomeTaxRate} from '../src/data/schoolRepository';
+import {openSchool,updateIncomeTaxRate,updateDepartmentNames} from '../src/data/schoolRepository';
 import {pairId,starterJobs} from '../src/domain/jobs';
 import {incomeTaxJournalId} from '../src/domain/finance';
 import type {SchoolContext} from '../src/domain/model';
@@ -120,6 +120,34 @@ describe('세율 설정',()=>{
     // this asserts the read-side default (schoolRepository.openSchool), not the update rule.
     const {school}=await openSchool(db('teacher-a'),'teacher-a','a');
     expect(school.incomeTaxRateBp).toBe(0);
+  });
+  it('국 이름 필드 없이 만들어진 기존 학교도 읽으면 빈 값으로 취급된다',async()=>{
+    const {school}=await openSchool(db('teacher-a'),'teacher-a','a');
+    expect(school.departmentNames).toEqual({});
+  });
+});
+describe('국 이름 설정 (D-85)',()=>{
+  async function seedFullSchool(sid='a'){
+    await env.withSecurityRulesDisabled(async c=>{
+      await setDoc(doc(c.firestore(),`schools/${sid}`),{schoolId:sid,schoolName:'가상학교',communityName:'작은 사회',currencyName:'별',currencySymbol:'S',timezone:'Asia/Seoul',status:'active',schemaVersion:1});
+    });
+  }
+  it('교사가 국 이름을 설정하면 저장되고, 다른 필드는 그대로 남는다',async()=>{
+    await seedFullSchool();
+    await updateDepartmentNames(db('teacher-a'),context('teacher'),{economy:'경제국',media:'',life:'',culture:''});
+    const {school}=await openSchool(db('teacher-a'),'teacher-a','a');
+    expect(school.departmentNames).toEqual({economy:'경제국',media:'',life:'',culture:''});
+    expect(school.schoolName).toBe('가상학교');
+  });
+  it('학생은 국 이름을 설정할 수 없다',async()=>{
+    await seedFullSchool();
+    await assertFails(updateDoc(doc(db('a-one'),'schools/a'),{departmentNames:{economy:'해킹',media:'',life:'',culture:''},updatedAt:serverTimestamp()}));
+  });
+  it('4개 국을 모두 채우지 않거나 길이를 넘으면 거부된다',async()=>{
+    await seedFullSchool();
+    await assertFails(updateDoc(doc(db('teacher-a'),'schools/a'),{departmentNames:{economy:'경제국'},updatedAt:serverTimestamp()}));
+    await assertFails(updateDoc(doc(db('teacher-a'),'schools/a'),{departmentNames:{economy:'가'.repeat(21),media:'',life:'',culture:''},updatedAt:serverTimestamp()}));
+    await expect(updateDepartmentNames(db('teacher-a'),context('teacher'),{economy:'가'.repeat(21),media:'',life:'',culture:''})).rejects.toThrow();
   });
 });
 describe('공동기금 지출',()=>{

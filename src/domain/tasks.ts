@@ -3,6 +3,10 @@ export type TaskStatus='assigned'|'submitted'|'approved'|'revision_requested';
 export interface TaskTemplate {id:string;schoolId:string;jobId:string;title:string;instructions:string;verificationKind:VerificationKind;status:'active'|'archived';schemaVersion:1}
 export interface Task {id:string;schoolId:string;templateId:string;jobId:string;assigneeStudentId:string;verificationKind:VerificationKind;status:TaskStatus;attempt:number;submissionText:string;reviewNote:string;reviewerUid:string|null;schemaVersion:1}
 export interface TaskData {templates:TaskTemplate[];tasks:Task[]}
+// One immutable snapshot per submit()/submitPhoto() attempt (D-89) — the task doc itself only
+// ever keeps the latest submissionText, overwritten on resubmission. Photo bytes are never
+// archived here (D-37 keeps those short-lived and deleted at review time); only the caption text.
+export interface TaskSubmissionEntry {id:string;schoolId:string;taskId:string;studentId:string;attempt:number;verificationKind:VerificationKind;submissionText:string;submittedAt:string}
 export const verificationKindNames:Record<VerificationKind,string>={artifact:'결과물 제출',photo:'사진 인증(다음 단계)',system:'자동 인증(다음 단계)'};
 export const taskStatusNames:Record<TaskStatus,string>={assigned:'수행 중',submitted:'검토 대기',approved:'완료',revision_requested:'다시 제출'};
 export function validateTemplate(t:TaskTemplate){

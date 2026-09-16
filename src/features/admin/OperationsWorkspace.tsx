@@ -3,7 +3,7 @@ import {EmailAuthProvider,reauthenticateWithCredential,updatePassword} from 'fir
 import {auditActionNames,type AuditLog} from '../../domain/audit';
 import {formatMoney} from '../../domain/money';
 import type {EconomicStats} from '../../domain/finance';
-import type {Student} from '../../domain/model';
+import type {SchoolContext,Student} from '../../domain/model';
 import type {AuditStore} from '../../data/auditRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import type {TaskStore} from '../../data/taskRepository';
@@ -11,6 +11,10 @@ import type {BusinessStore} from '../../data/businessRepository';
 import type {ProposalStore} from '../../data/proposalRepository';
 import type {FinanceStore} from '../../data/financeRepository';
 import {firebase} from '../../data/firebase';
+
+// Keep in lockstep with the identical constant in src/app/App.tsx (not imported from there to
+// avoid a circular App.tsx <-> OperationsWorkspace.tsx dependency).
+const ADMIN_WORKER_URL='https://jobedu-admin.jobedu-admin-worker.workers.dev';
 
 function readablePasswordError(error:unknown){
   const code=(error as {code?:string}).code;
@@ -49,8 +53,79 @@ function PasswordSettings(){
   </form>;
 }
 
-export function OperationsWorkspace({auditStore,careerStore,taskStore,businessStore,proposalStore,financeStore,students,currencySymbol='마동'}:{
-  auditStore:AuditStore;careerStore:CareerStore;taskStore:TaskStore;businessStore:BusinessStore;proposalStore:ProposalStore;financeStore:FinanceStore;students:Student[];currencySymbol?:string;
+interface TeacherMember {uid:string;email:string;role:string;status:string}
+// Owner-only (D-95): the app treats 'teacher'/'owner' as equally privileged everywhere else, but
+// creating other staff accounts and resetting their passwords is sensitive enough to keep to the
+// one account that bootstrapped the school — enforced server-side by the Worker (isOwner()), not
+// just by hiding this panel from non-owners here.
+function TeacherAccountAdmin({context}:{context:SchoolContext}){
+  const [teachers,setTeachers]=useState<TeacherMember[]|null>(null);
+  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
+  const [resetting,setResetting]=useState<string|null>(null);
+
+  async function call(body:Record<string,unknown>){
+    if(!firebase)throw new Error('연결을 확인해 주세요.');
+    const idToken=await firebase.auth.currentUser!.getIdToken();
+    const res=await fetch(ADMIN_WORKER_URL,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${idToken}`},body:JSON.stringify({schoolId:context.schoolId,...body})});
+    const data=await res.json() as Record<string,unknown>;
+    if(!res.ok)throw new Error(typeof data.error==='string'?data.error:'요청을 처리하지 못했습니다.');
+    return data;
+  }
+  async function loadTeachers(){
+    const data=await call({action:'listTeachers'});
+    setTeachers((data.teachers as TeacherMember[])??[]);
+  }
+  useEffect(()=>{loadTeachers().catch(e=>setError((e as Error).message))},[context.schoolId]);
+
+  async function createTeacher(e:FormEvent<HTMLFormElement>){
+    e.preventDefault();if(busy)return;
+    const form=e.currentTarget,f=new FormData(form);
+    const email=String(f.get('email')||'').trim(),password=String(f.get('password')||'').trim();
+    setBusy(true);setError('');setMessage('');
+    try{
+      const data=await call({action:'createTeacher',email,password});
+      setMessage(`계정을 만들었습니다: ${data.email} / 비밀번호: ${data.password} — 새 교사에게 안전하게 전달해 주세요.`);
+      form.reset();
+      await loadTeachers();
+    }catch(err){setError((err as Error).message)}
+    finally{setBusy(false)}
+  }
+  async function resetPassword(email:string,password:string){
+    setBusy(true);setError('');setMessage('');
+    try{
+      const data=await call({action:'resetTeacherPassword',email,password});
+      setMessage(`${data.email}의 새 비밀번호: ${data.password}`);
+      setResetting(null);
+    }catch(err){setError((err as Error).message)}
+    finally{setBusy(false)}
+  }
+
+  return <section className="panel section">
+    <h3>교사 계정 관리(최고 관리자)</h3>
+    <p className="muted">새 교사 계정을 만들거나 기존 교사의 비밀번호를 재설정할 수 있어요. 이 화면은 최고 관리자 계정에만 보입니다.</p>
+    {error&&<p role="alert" className="error">{error}</p>}
+    {message&&<p role="status" className="notice">{message}</p>}
+    <form className="action-form" onSubmit={createTeacher}>
+      <label>새 교사 이메일<input type="email" name="email" required/></label>
+      <label>비밀번호(선택, 비우면 자동 생성)<input type="text" name="password" minLength={6} placeholder="비워두면 임의 생성"/></label>
+      <button className="button primary" disabled={busy}>{busy?'처리 중…':'교사 계정 만들기'}</button>
+    </form>
+    {teachers===null?<p role="status">불러오는 중…</p>:!teachers.length?<p className="empty">등록된 교사가 없어요.</p>:<div className="list">
+      {teachers.map(t=><article key={t.uid} className="task-row">
+        <div className="task-row-head"><b>{t.email||'(이메일 정보 없음 — admin-bootstrap으로 만든 이전 계정)'}</b><span className="badge">{t.role==='owner'?'최고 관리자':'교사'}</span></div>
+        {resetting===t.uid
+          ?<form className="action-form" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);void resetPassword(t.email,String(f.get('password')||''))}}>
+              <label>새 비밀번호(선택, 비우면 자동 생성)<input type="text" name="password" minLength={6} placeholder="비워두면 임의 생성"/></label>
+              <div className="header-actions"><button className="button primary" disabled={busy}>재설정</button><button type="button" className="button quiet" onClick={()=>setResetting(null)}>취소</button></div>
+            </form>
+          :<button className="button quiet" disabled={busy||!t.email} onClick={()=>setResetting(t.uid)}>비밀번호 재설정</button>}
+      </article>)}
+    </div>}
+  </section>;
+}
+
+export function OperationsWorkspace({auditStore,careerStore,taskStore,businessStore,proposalStore,financeStore,students,currencySymbol='마동',context}:{
+  auditStore:AuditStore;careerStore:CareerStore;taskStore:TaskStore;businessStore:BusinessStore;proposalStore:ProposalStore;financeStore:FinanceStore;students:Student[];currencySymbol?:string;context?:SchoolContext;
 }){
   const [logs,setLogs]=useState<AuditLog[]>([]);
   const [counts,setCounts]=useState<Record<string,number>|null>(null);
@@ -100,5 +175,6 @@ export function OperationsWorkspace({auditStore,careerStore,taskStore,businessSt
     <h3 className="section">최근 주요 활동</h3>
     {!logs.length?<p className="empty">아직 기록된 활동이 없어요.</p>:<div className="list">{logs.map(l=><article key={l.id} className="task-row"><div className="task-row-head"><b>{auditActionNames[l.action]??l.action}</b><span className="badge">{l.targetType}</span></div><p className="muted">{l.detail}</p></article>)}</div>}
     <PasswordSettings/>
+    {context?.membership.role==='owner'&&<TeacherAccountAdmin context={context}/>}
   </section>;
 }

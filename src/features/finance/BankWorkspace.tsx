@@ -10,6 +10,7 @@ import type {LoanStore} from '../../data/loanRepository';
 import type {FinancialProductStore} from '../../data/financialProductRepository';
 import {updateIncomeTaxRate} from '../../data/schoolRepository';
 import {firebase} from '../../data/firebase';
+import {FunctionIcon} from '../../ui/FunctionIcon';
 
 interface BankProps {store:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;teacher:boolean;students?:Student[];currencySymbol?:string;context?:SchoolContext;incomeTaxRateBp?:number}
 
@@ -28,11 +29,11 @@ function StudentBank({store,savingsStore,loanStore,productStore,currencySymbol}:
   },[store]);
   if(loading)return <p role="status">계좌를 불러오고 있어요.</p>;
   return <section className="citizen-tasks">
-    <h2>내 마동 계좌</h2>
+    <h2 className="icon-heading"><FunctionIcon name="bank"/>내 마동 계좌</h2>
     {error&&<p role="alert" className="error">{error}</p>}
     <div className="task-row"><div className="task-row-head"><b>현재 잔액</b><span className="badge">{formatMoney(account?.balanceMinor??0,currencySymbol)}</span></div>
       {!account&&<p className="muted">아직 지급된 월급이 없어요. 직업을 맡고 교사의 월급 정산을 기다려 주세요.</p>}</div>
-    <h3>최근 거래</h3>
+    <h3 className="icon-heading"><FunctionIcon name="ledger"/>최근 거래</h3>
     {!entries.length?<p className="empty">아직 거래 내역이 없어요.</p>:<div className="list">{entries.map(e=><article key={e.id} className="task-row"><div className="task-row-head"><b>{e.label}</b><span className={e.deltaMinor>=0?'badge':'badge'}>{e.deltaMinor>=0?'+':''}{formatMoney(e.deltaMinor,currencySymbol)}</span></div><p className="muted">잔액 {formatMoney(e.balanceAfterMinor,currencySymbol)}</p></article>)}</div>}
     <StudentSavings savingsStore={savingsStore} productStore={productStore} currencySymbol={currencySymbol}/>
     <StudentLoans loanStore={loanStore} productStore={productStore} currencySymbol={currencySymbol}/>
@@ -68,7 +69,7 @@ function StudentSavings({savingsStore,productStore,currencySymbol}:{savingsStore
   const amountOk=product?validAmount(product,principal):false;
   const monthsOk=product?validMonths(product,months):false;
   return <div className="section">
-    <h3>저축</h3>
+    <h3 className="icon-heading"><FunctionIcon name="savings"/>저축</h3>
     {error&&<p role="alert" className="error">{error}</p>}
     {message&&<p role="status" className="success">{message}</p>}
     {!products.length?<p className="empty">아직 가입할 수 있는 저축 상품이 없어요.</p>:<>
@@ -96,6 +97,7 @@ function StudentLoans({loanStore,productStore,currencySymbol}:{loanStore:LoanSto
   const [principal,setPrincipal]=useState(0),[months,setMonths]=useState(1);
   const [purpose,setPurpose]=useState(''),[repaymentPlan,setRepaymentPlan]=useState('');
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
+  const [partialAmount,setPartialAmount]=useState<Record<string,number>>({});
   async function load(){
     const [p,r,l]=await Promise.all([productStore.listProducts('loan'),loanStore.myRequests(),loanStore.myLoans()]);
     const active=p.filter(x=>x.status==='active');
@@ -114,16 +116,16 @@ function StudentLoans({loanStore,productStore,currencySymbol}:{loanStore:LoanSto
     }catch(e){setError((e as Error).message)}
     finally{setBusy(false)}
   }
-  async function repay(contractId:string){
+  async function repay(contractId:string,amountMinor?:number){
     setBusy(true);setError('');setMessage('');
-    try{await loanStore.repay(contractId);setMessage('대출을 상환했어요.');await load()}
+    try{await loanStore.repay(contractId,amountMinor);setMessage(amountMinor?'대출을 일부 상환했어요.':'대출을 상환했어요.');await load()}
     catch(e){setError((e as Error).message)}
     finally{setBusy(false)}
   }
   const amountOk=product?validAmount(product,principal):false;
   const monthsOk=product?validMonths(product,months):false;
   return <div className="section">
-    <h3>대출</h3>
+    <h3 className="icon-heading"><FunctionIcon name="loan"/>대출</h3>
     {error&&<p role="alert" className="error">{error}</p>}
     {message&&<p role="status" className="success">{message}</p>}
     {!products.length?<p className="empty">아직 신청할 수 있는 대출 상품이 없어요.</p>:<div className="assignment-form">
@@ -139,7 +141,13 @@ function StudentLoans({loanStore,productStore,currencySymbol}:{loanStore:LoanSto
     <h4>내 대출 신청</h4>
     {!requests.length?<p className="empty">신청한 대출이 없어요.</p>:<div className="list">{requests.map(r=><article key={r.id} className="task-row"><div className="task-row-head"><b>{formatMoney(r.principalMinor,currencySymbol)} · {r.months}개월</b><span className="badge">{loanRequestStatusNames[r.status]}</span></div>{r.status==='rejected'&&r.decisionNote&&<p className="muted">반려 사유: {r.decisionNote}</p>}</article>)}</div>}
     <h4>내 대출</h4>
-    {!loans.length?<p className="empty">실행된 대출이 없어요.</p>:<div className="list">{loans.map(l=><article key={l.id} className="task-row"><div className="task-row-head"><b>{l.productSnapshot.name}</b><span className="badge">{l.status==='repaid'?'상환 완료':'상환 중'}</span></div><p className="muted">원금 {formatMoney(l.principalMinor,currencySymbol)} · 이자 {formatMoney(l.interestMinor,currencySymbol)} · 갚을 금액 {formatMoney(l.totalOwedMinor,currencySymbol)}</p>{l.status==='active'&&<button className="button primary" disabled={busy} onClick={()=>repay(l.id)}>전액 상환하기</button>}</article>)}</div>}
+    {!loans.length?<p className="empty">실행된 대출이 없어요.</p>:<div className="list">{loans.map(l=>{const remaining=l.totalOwedMinor-l.repaidMinor;return <article key={l.id} className="task-row"><div className="task-row-head"><b>{l.productSnapshot.name}</b><span className="badge">{l.status==='repaid'?'상환 완료':'상환 중'}</span></div><p className="muted">원금 {formatMoney(l.principalMinor,currencySymbol)} · 이자 {formatMoney(l.interestMinor,currencySymbol)} · 갚을 금액 {formatMoney(l.totalOwedMinor,currencySymbol)}{l.repaidMinor>0&&l.status==='active'&&<> · 지금까지 {formatMoney(l.repaidMinor,currencySymbol)} 상환 · 남은 금액 {formatMoney(remaining,currencySymbol)}</>}</p>
+      {l.status==='active'&&<div className="header-actions">
+        <input type="number" min={1} max={remaining/100} placeholder="일부 금액" value={partialAmount[l.id]??''} onChange={e=>setPartialAmount({...partialAmount,[l.id]:Number(e.target.value)})} style={{width:'8em'}}/>
+        <button className="button quiet" disabled={busy||!partialAmount[l.id]} onClick={()=>repay(l.id,Math.round((partialAmount[l.id]??0)*100))}>일부 상환</button>
+        <button className="button primary" disabled={busy} onClick={()=>repay(l.id)}>전액 상환하기</button>
+      </div>}
+    </article>})}</div>}
   </div>;
 }
 
@@ -200,7 +208,7 @@ function TeacherBank({store,savingsStore,loanStore,productStore,students,currenc
   const total=payable.reduce((sum,i)=>sum+i.amountMinor,0);
 
   return <section className="citizen-tasks">
-    <div className="section-heading"><h2>월급 정산</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="salary"/>월급 정산</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {result&&<p role="status" className="success">지급 완료 {result.paid}건 · 이미 지급됨 {result.skipped}건 · 실패 {result.failed}건</p>}
     <div className="assignment-form">
@@ -252,7 +260,7 @@ function TeacherIncomeTax({store,context,initialRateBp,period,currencySymbol}:{s
   const payable=items?.filter(i=>!i.alreadyPaid)??[];
   const total=payable.reduce((sum,i)=>sum+i.amountMinor,0);
   return <div className="section">
-    <div className="section-heading"><h2>소득세</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="tax"/>소득세</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {result&&<p role="status" className="success">징수 완료 {result.paid}건 · 이미 징수됨 {result.skipped}건 · 실패 {result.failed}건</p>}
     <div className="assignment-form">
@@ -292,7 +300,7 @@ function TeacherCommunityFund({store,currencySymbol}:{store:FinanceStore;currenc
     finally{setBusy(false)}
   }
   return <div className="section">
-    <div className="section-heading"><h2>공동기금</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="fund"/>공동기금</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {message&&<p role="status" className="success">{message}</p>}
     <p className="muted">현재 잔액 {formatMoney(balance??0,currencySymbol)} (소득세·사업 세금·과태료가 모입니다)</p>
@@ -330,7 +338,7 @@ function TeacherProducts({productStore,currencySymbol}:{productStore:FinancialPr
   }
   const kindNames:Record<string,string>={savings:'저축',loan:'대출'};
   return <div className="section">
-    <div className="section-heading"><h2>금융상품 관리</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="product"/>금융상품 관리</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {!products.length&&<button className="button primary" disabled={busy} onClick={seedDefaults}>기본 상품(저축·대출 각 단기·장기) 만들기</button>}
     {!!products.length&&<div className="list">{products.map(p=><article key={p.id} className="task-row"><div className="task-row-head"><b>{kindNames[p.kind]} · {p.name}</b><span className="badge">{p.status==='active'?`월 ${(p.rateBpsMonthly/100).toFixed(1)}%`:'닫힘'}</span></div><p className="muted">{p.minMonths}~{p.maxMonths}개월 · {formatMoney(p.minMinor,currencySymbol)}~{formatMoney(p.maxMinor,currencySymbol)}{p.status==='active'&&<button className="button quiet" disabled={busy} onClick={()=>closeProduct(p.id)}>닫기</button>}</p></article>)}</div>}
@@ -355,7 +363,7 @@ function TeacherSavingsMaturities({savingsStore,currencySymbol}:{savingsStore:Sa
   }
   const total=items?.reduce((sum,i)=>sum+i.payoutMinor,0)??0;
   return <div className="section">
-    <div className="section-heading"><h2>저축 만기 정산</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="savings"/>저축 만기 정산</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {result&&<p role="status" className="success">지급 완료 {result.paid}건 · 이미 처리됨 {result.skipped}건 · 실패 {result.failed}건</p>}
     <button className="button primary" disabled={busy} onClick={previewMaturities}>만기 도래 계약 미리보기</button>
@@ -395,7 +403,7 @@ function TeacherLoanRequests({loanStore,students,currencySymbol}:{loanStore:Loan
     finally{setBusy(false)}
   }
   return <div className="section">
-    <div className="section-heading"><h2>대출 신청 검토</h2></div>
+    <div className="section-heading"><h2 className="icon-heading"><FunctionIcon name="loan"/>대출 신청 검토</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}
     {message&&<p role="status" className="success">{message}</p>}
     <h3>검토자 배정 대기 ({pending.length})</h3>

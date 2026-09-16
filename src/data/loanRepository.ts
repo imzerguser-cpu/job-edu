@@ -5,7 +5,7 @@ import {assertApplicant} from '../domain/jobs';
 import {ISSUER_ACCOUNT_ID,validAmount,validMonths,type FinancialProduct} from '../domain/finance';
 import {addCalendarMonths,simpleInterest} from '../domain/money';
 import {
-  canAssign,canDecide,canReject,canReview,loanJournalId,loanRepaymentJournalId,validatePurpose,validateRepaymentPlan,
+  canAssign,canDecide,canReject,canReview,loanJournalId,loanRepaymentJournalId,validatePurpose,validateRepaymentPlan,validRepaymentAmount,
   type FinanceReviewChecklist,type FinancialRequest,type LoanContract,
 } from '../domain/loans';
 
@@ -13,7 +13,7 @@ export interface LoanStore {
   submitRequest(input:{productId:string;principalMinor:number;months:number;purpose:string;repaymentPlan:string}):Promise<void>;
   myRequests():Promise<FinancialRequest[]>;
   myLoans():Promise<LoanContract[]>;
-  repay(contractId:string):Promise<void>;
+  repay(contractId:string,amountMinor?:number):Promise<void>;
   myReviewAssignments():Promise<FinancialRequest[]>;
   submitReview(requestId:string,checklist:FinanceReviewChecklist,note:string):Promise<void>;
   allRequests():Promise<FinancialRequest[]>;
@@ -49,29 +49,39 @@ export function firestoreLoans(db:Firestore,context:SchoolContext):LoanStore{
     async myLoans(){
       const studentId=assertApplicant(context);
       const snap=await getDocsFromServer(query(collection(db,schoolPath(context,'loans')),where('studentId','==',studentId),limit(100)));
-      return snap.docs.map(d=>({...d.data(),id:d.id} as LoanContract));
+      // repaymentCount predates D-91 for any loan issued before it; default the same way
+      // openSchool() defaults incomeTaxRateBp for pre-existing School docs.
+      return snap.docs.map(d=>({...d.data(),repaymentCount:d.data().repaymentCount??0,id:d.id} as LoanContract));
     },
-    async repay(contractId){
+    // amountMinor omitted -> pays off the full remaining balance in one shot (unchanged default
+    // behavior). A caller-supplied amount lets a student split repayment across several visits
+    // (D-91) — each partial payment gets its own immutable journal, indexed by repaymentCount.
+    async repay(contractId,amountMinor){
       const studentId=assertApplicant(context);
-      const repaymentJournalId=loanRepaymentJournalId(contractId);
       await runTransaction(db,async tx=>{
         const contractRef=ref('loans',contractId);
         const contract=await tx.get(contractRef);
         if(!contract.exists()||contract.data().studentId!==studentId)throw new Error('내 대출만 상환할 수 있습니다.');
-        if(contract.data().status!=='active')throw new Error('이미 상환된 대출입니다.');
-        const amount=contract.data().totalOwedMinor as number;
+        if(contract.data().status!=='active')throw new Error('이미 상환이 끝난 대출입니다.');
+        const totalOwedMinor=contract.data().totalOwedMinor as number,repaidSoFar=contract.data().repaidMinor as number;
+        const remaining=totalOwedMinor-repaidSoFar;
+        const amount=amountMinor??remaining;
+        validRepaymentAmount(amount,remaining);
         const studentRef=ref('accounts',studentId),issuerRef=ref('accounts',ISSUER_ACCOUNT_ID);
         const [student,issuer]=await Promise.all([tx.get(studentRef),tx.get(issuerRef)]);
         if(!student.exists()||student.data().balanceMinor<amount)throw new Error('마동이 부족합니다.');
         if(!issuer.exists())throw new Error('발행 계좌가 준비되지 않았습니다.');
+        const repaymentCount=(contract.data().repaymentCount as number|undefined)??0;
+        const repaymentJournalId=loanRepaymentJournalId(contractId,repaymentCount);
+        const repaidAfter=repaidSoFar+amount,payingOff=repaidAfter>=totalOwedMinor;
         tx.set(ref('journals',repaymentJournalId),{schoolId:context.schoolId,type:'LOAN_REPAYMENT',studentId,contractId,debitAccountId:studentId,creditAccountId:ISSUER_ACCOUNT_ID,amountMinor:amount,postedBy:studentId,schemaVersion:1,createdAt:serverTimestamp()});
         const studentAfter=student.data().balanceMinor-amount;
         tx.update(studentRef,{balanceMinor:studentAfter,version:student.data().version+1,lastJournalId:repaymentJournalId,updatedAt:serverTimestamp()});
-        tx.set(doc(collection(studentRef,'entries'),repaymentJournalId),{schoolId:context.schoolId,journalId:repaymentJournalId,type:'LOAN_REPAYMENT',deltaMinor:-amount,balanceAfterMinor:studentAfter,label:'대출 상환',postedAt:serverTimestamp()});
+        tx.set(doc(collection(studentRef,'entries'),repaymentJournalId),{schoolId:context.schoolId,journalId:repaymentJournalId,type:'LOAN_REPAYMENT',deltaMinor:-amount,balanceAfterMinor:studentAfter,label:payingOff?'대출 완제':'대출 분할 상환',postedAt:serverTimestamp()});
         const issuerAfter=issuer.data().balanceMinor+amount;
         tx.update(issuerRef,{balanceMinor:issuerAfter,version:issuer.data().version+1,lastJournalId:repaymentJournalId,updatedAt:serverTimestamp()});
         tx.set(doc(collection(issuerRef,'entries'),repaymentJournalId),{schoolId:context.schoolId,journalId:repaymentJournalId,type:'LOAN_REPAYMENT',deltaMinor:amount,balanceAfterMinor:issuerAfter,label:'대출 상환 수납',postedAt:serverTimestamp()});
-        tx.update(contractRef,{status:'repaid',repaidMinor:amount,repaymentJournalId,updatedAt:serverTimestamp()});
+        tx.update(contractRef,{status:payingOff?'repaid':'active',repaidMinor:repaidAfter,repaymentCount:repaymentCount+1,repaymentJournalId,updatedAt:serverTimestamp()});
       });
     },
     async myReviewAssignments(){
@@ -145,7 +155,7 @@ export function firestoreLoans(db:Firestore,context:SchoolContext):LoanStore{
             schoolId:context.schoolId,studentId:request.studentId,productId:request.productId,
             productSnapshot:{name:product.name,rateBpsMonthly:product.rateBpsMonthly},
             principalMinor:request.principalMinor,months:request.months,interestMinor,totalOwedMinor,repaidMinor:0,
-            status:'active',disbursementJournalId:journalId,repaymentJournalId:null,
+            status:'active',disbursementJournalId:journalId,repaymentJournalId:null,repaymentCount:0,
             startAt:today,dueAt,schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),
           });
           tx.update(requestRef,{status:'approved',decisionNote:note,reviewerUid:context.uid,createdEntityId:requestId,updatedAt:serverTimestamp()});

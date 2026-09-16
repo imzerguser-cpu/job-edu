@@ -81,7 +81,7 @@ async function createTeacher(){
   if(!school.exists){console.error(`schools/${schoolId}가 없습니다. create-school을 먼저 실행해 주세요.`);process.exit(1)}
   let user;
   try{user=await auth.getUserByEmail(email)}catch{user=await auth.createUser({email,password})}
-  await db.doc(`schools/${schoolId}/members/${user.uid}`).set({schoolId,role,studentId:null,status:'active'});
+  await db.doc(`schools/${schoolId}/members/${user.uid}`).set({schoolId,role,studentId:null,status:'active',email});
   await db.doc(`userSchools/${user.uid}/links/${schoolId}`).set({schoolId,schoolName:school.data().schoolName});
   console.log(`선생님 계정 준비 완료: ${email} / 비밀번호: ${password} (uid=${user.uid}, role=${role})`);
 }

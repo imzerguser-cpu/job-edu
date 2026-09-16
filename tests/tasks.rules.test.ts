@@ -116,3 +116,34 @@ describe('제출과 검토',()=>{
     await expect(store('teacher','b').load().then(d=>d.tasks)).resolves.toHaveLength(0);
   });
 });
+describe('제출 이력 (D-89)',()=>{
+  async function assigned(){
+    const teacher=store('teacher');
+    await teacher.saveTemplate(template('tpl1'));
+    await teacher.assign('tpl1','one');
+    return pairId('tpl1','one');
+  }
+  it('제출할 때마다 이력이 한 건씩 쌓이고, 최신 시도가 업무 문서 내용과 일치한다',async()=>{
+    const taskId=await assigned();
+    await store('student').submit(taskId,'첫 제출');
+    await store('teacher').review((await store('teacher').load()).tasks[0],false,'다시요');
+    await store('student').submit(taskId,'두 번째 제출');
+    const history=await store('teacher').submissionHistory(taskId);
+    expect(history).toHaveLength(2);
+    expect(history.map(h=>h.attempt)).toEqual([1,2]);
+    expect(history[0].submissionText).toBe('첫 제출');
+    expect(history[1].submissionText).toBe('두 번째 제출');
+  });
+  it('업무를 맡은 학생 본인과 교사만 이력을 볼 수 있다',async()=>{
+    const taskId=await assigned();
+    await store('student').submit(taskId,'제출 내용');
+    await assertSucceeds(store('student','a','one').submissionHistory(taskId));
+    await expect(store('student','a','two').submissionHistory(taskId)).rejects.toThrow();
+  });
+  it('학생이 이력을 직접 써넣거나 남의 시도 번호로 조작할 수 없다',async()=>{
+    const taskId=await assigned();
+    await assertFails(setDoc(doc(db('a-one'),`schools/a/tasks/${taskId}/submissions/1`),{schoolId:'a',taskId,studentId:'one',attempt:1,verificationKind:'artifact',submissionText:'위조',submittedAt:serverTimestamp()}));
+    await store('student').submit(taskId,'정상 제출');
+    await assertFails(setDoc(doc(db('a-one'),`schools/a/tasks/${taskId}/submissions/2`),{schoolId:'a',taskId,studentId:'one',attempt:2,verificationKind:'artifact',submissionText:'없는 시도 위조',submittedAt:serverTimestamp()}));
+  });
+});

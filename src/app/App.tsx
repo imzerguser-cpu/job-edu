@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useRef,useState,type FormEvent} from 'react';
 import {onAuthStateChanged,signInWithEmailAndPassword,signOut,type User} from 'firebase/auth';
 import {firebase} from '../data/firebase';
-import {getCitizen,listSchools,listStudents,openSchool,updateStudent} from '../data/schoolRepository';
+import {getCitizen,listSchools,listStudentsPage,openSchool,updateStudent,type StudentPage} from '../data/schoolRepository';
 import {isTeacher,type School,type SchoolContext,type Student} from '../domain/model';
 import {studentLoginEmail} from '../domain/studentAuth';
 import {Demo} from '../features/jobs/Demo';
@@ -25,7 +25,8 @@ import {CivicWorkspace} from '../features/civic/CivicWorkspace';
 import {ViolationWorkspace} from '../features/civic/ViolationWorkspace';
 import {OperationsWorkspace} from '../features/admin/OperationsWorkspace';
 
-const ADMIN_WORKER_URL='https://jobedu-admin.jobedu-admin-worker.workers.dev';
+export const ADMIN_WORKER_URL='https://jobedu-admin.jobedu-admin-worker.workers.dev';
+// Keep in lockstep with the identical interface in cf-worker/src/index.ts.
 interface BulkRowResult {name:string;grade:string;ok:boolean;password?:string;error?:string}
 function readableError(error:unknown){
   const code=(error as {code?:string}).code;
@@ -154,11 +155,18 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
     }catch(e){setError(readableError(e))}
     finally{setBulkBusy(false)}
   }
-  useEffect(()=>{let alive=true;setLoading(true);setStudents([]);setCitizen(null);setError('');const client=firebase!;
-    (teacher?listStudents(client.db,context).then(s=>{if(alive)setStudents(s)}):getCitizen(client.db,context).then(s=>{if(alive)setCitizen(s)})).catch(e=>{if(alive)setError(readableError(e))}).finally(()=>{if(alive)setLoading(false)});return()=>{alive=false};
+  const [studentCursor,setStudentCursor]=useState<StudentPage['cursor']>(null),[hasMoreStudents,setHasMoreStudents]=useState(false),[loadingMore,setLoadingMore]=useState(false);
+  useEffect(()=>{let alive=true;setLoading(true);setStudents([]);setCitizen(null);setError('');setStudentCursor(null);setHasMoreStudents(false);const client=firebase!;
+    (teacher?listStudentsPage(client.db,context).then(p=>{if(alive){setStudents(p.students);setStudentCursor(p.cursor);setHasMoreStudents(p.hasMore)}}):getCitizen(client.db,context).then(s=>{if(alive)setCitizen(s)})).catch(e=>{if(alive)setError(readableError(e))}).finally(()=>{if(alive)setLoading(false)});return()=>{alive=false};
   },[context,teacher,refresh]);
+  async function loadMoreStudents(){
+    if(loadingMore||!firebase)return;setLoadingMore(true);setError('');
+    try{const p=await listStudentsPage(firebase.db,context,studentCursor);setStudents(prev=>[...prev,...p.students]);setStudentCursor(p.cursor);setHasMoreStudents(p.hasMore)}
+    catch(e){setError(readableError(e))}
+    finally{setLoadingMore(false)}
+  }
   if(!teacher)return <>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:citizen?<StudentHome citizen={citizen} school={school} context={context} store={store} taskStore={taskStore} financeStore={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} businessStore={businessStore} proposalStore={proposalStore} violationStore={violationStore}/>:null}</>;
-  return <><div className="page-heading"><div><span className="eyebrow">{school.schoolName}</span><h1>시민 관리</h1><p>우리 학교 시민의 등록 상태를 확인합니다.</p></div><span className="tag">교사 운영실</span></div>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:<><section className="panel"><div className="section-heading"><h2>학생 명단 <span className="count">{students.length}</span></h2><div className="header-actions"><button className="button quiet" onClick={()=>setRefresh(n=>n+1)}>새로고침</button><button className="button primary" onClick={()=>setImporting(!importing)}>명단 가져오기</button></div></div>{students.length===100&&<p className="notice">현재 이름순 첫 100명입니다. 대규모 명단은 다음 관리 단계에서 페이지 조회를 확장합니다.</p>}{students.length?<div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>반</th><th>학년도</th><th>상태</th><th></th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td>{s.name}</td><td>{s.grade}학년</td><td>{s.className??'미지정'}</td><td>{s.schoolYear}</td><td>{s.status==='active'?'활동 중':s.status==='graduated'?'졸업':'전출'}</td><td><button className="button quiet" onClick={()=>setEditingStudent(s)}>수정</button> <button className="button quiet" onClick={()=>{setResettingStudent(s);setResetResult(null)}}>비밀번호 재설정</button></td></tr>)}</tbody></table></div>:<div className="empty">등록된 학생이 없습니다. 명단을 확인한 뒤 가져와 주세요.</div>}</section>
+  return <><div className="page-heading"><div><span className="eyebrow">{school.schoolName}</span><h1>시민 관리</h1><p>우리 학교 시민의 등록 상태를 확인합니다.</p></div><span className="tag">교사 운영실</span></div>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:<><section className="panel"><div className="section-heading"><h2>학생 명단 <span className="count">{students.length}</span></h2><div className="header-actions"><button className="button quiet" onClick={()=>setRefresh(n=>n+1)}>새로고침</button><button className="button primary" onClick={()=>setImporting(!importing)}>명단 가져오기</button></div></div>{students.length?<div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>반</th><th>학년도</th><th>상태</th><th></th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td>{s.name}</td><td>{s.grade}학년</td><td>{s.className??'미지정'}</td><td>{s.schoolYear}</td><td>{s.status==='active'?'활동 중':s.status==='graduated'?'졸업':'전출'}</td><td><button className="button quiet" onClick={()=>setEditingStudent(s)}>수정</button> <button className="button quiet" onClick={()=>{setResettingStudent(s);setResetResult(null)}}>비밀번호 재설정</button></td></tr>)}</tbody></table>{hasMoreStudents&&<button className="button quiet section" disabled={loadingMore} onClick={loadMoreStudents}>{loadingMore?'불러오는 중…':'학생 더 보기'}</button>}</div>:<div className="empty">등록된 학생이 없습니다. 명단을 확인한 뒤 가져와 주세요.</div>}</section>
     {editingStudent&&<form className="panel section action-form" onSubmit={saveStudent}>
       <h3>{editingStudent.name} 정보 수정</h3>
       <div className="fields"><label>학년<select name="grade" defaultValue={editingStudent.grade}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label><label>반<input name="className" defaultValue={editingStudent.className??''} maxLength={20}/></label></div>
@@ -175,6 +183,7 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
     <section className="panel section">
       <div className="section-heading"><h3>비밀번호 일괄 변경</h3><button type="button" className="button quiet" onClick={()=>setBulkOpen(!bulkOpen)}>{bulkOpen?'닫기':'구글 시트로 가져오기'}</button></div>
       {bulkOpen&&<>
+        {/* "최대 20명" mirrors MAX_BULK_ROWS in cf-worker/src/index.ts — keep both in sync. */}
         <p className="muted">구글 시트에 <b>이름,학년,학교코드,비밀번호</b> 순서로(첫 줄은 제목) 학생을 정리하고 "링크가 있는 모든 사용자 - 뷰어"로 공유한 뒤, 그 링크를 붙여넣어 주세요. 비밀번호 칸을 비워두면 자동 생성됩니다. 한 번에 최대 20명까지 처리됩니다.</p>
         <form className="assignment-form" onSubmit={bulkReset}>
           <label>구글 시트 링크<input name="sheetUrl" type="url" required placeholder="https://docs.google.com/spreadsheets/d/..."/></label>
@@ -188,5 +197,5 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
         </>}
       </>}
     </section>
-    {importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={true} students={students} studentId={context.membership.studentId??undefined}/></div><div className="section"><TaskWorkspace taskStore={taskStore} careerStore={store} teacher={true} students={students}/></div><div className="section"><BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} incomeTaxRateBp={school.incomeTaxRateBp}/></div><div className="section"><StoreWorkspace store={businessStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} businessTaxRateBp={school.businessTaxRateBp}/></div><div className="section"><CivicWorkspace store={proposalStore} teacher={true} students={students}/></div><div className="section"><ViolationWorkspace store={violationStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><OperationsWorkspace auditStore={auditStore} careerStore={store} taskStore={taskStore} businessStore={businessStore} proposalStore={proposalStore} financeStore={financeStore} students={students} currencySymbol={school.currencyName}/></div></>}</>;
+    {importing&&<section className="panel section"><RosterImport context={context} existing={students} onDone={()=>{setRefresh(n=>n+1);setImporting(false)}}/></section>}<div className="section"><CareerWorkspace store={store} schoolId={context.schoolId} teacher={true} students={students} studentId={context.membership.studentId??undefined} departmentNames={school.departmentNames} context={context}/></div><div className="section"><TaskWorkspace taskStore={taskStore} careerStore={store} teacher={true} students={students}/></div><div className="section"><BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} incomeTaxRateBp={school.incomeTaxRateBp}/></div><div className="section"><StoreWorkspace store={businessStore} teacher={true} students={students} currencySymbol={school.currencyName} context={context} businessTaxRateBp={school.businessTaxRateBp}/></div><div className="section"><CivicWorkspace store={proposalStore} teacher={true} students={students}/></div><div className="section"><ViolationWorkspace store={violationStore} teacher={true} students={students} currencySymbol={school.currencyName}/></div><div className="section"><OperationsWorkspace auditStore={auditStore} careerStore={store} taskStore={taskStore} businessStore={businessStore} proposalStore={proposalStore} financeStore={financeStore} students={students} currencySymbol={school.currencyName} context={context}/></div></>}</>;
 }

@@ -123,4 +123,18 @@ describe('저축 만기 정산',()=>{
     await seedMaturedContract();
     await assertFails(setDoc(doc(db('teacher-b'),'schools/a/savings/ready'),{status:'matured'},{merge:true}));
   });
+  it('만기가 아직 오지 않은 계약은 항목을 조작해도 정산되지 않는다(Rules 강제, D-84)',async()=>{
+    await env.withSecurityRulesDisabled(async c=>{
+      await setDoc(doc(c.firestore(),'schools/a/savings/early'),{schoolId:'a',studentId:'one',productId:'short',productSnapshot:{name:'단기저축',rateBpsMonthly:500},principalMinor:10000,months:3,startAt:'2026-01-01',maturityAt:'2099-01-01',status:'active',depositJournalId:'savingsDeposit~early',maturityJournalId:null,interestMinor:null,schemaVersion:1,createdAt:Timestamp.now(),updatedAt:Timestamp.now()});
+    });
+    // previewMaturities() itself would never surface this (maturityAt is in the future), so this
+    // simulates a caller that forges a settleMaturities() item directly, the same way the
+    // idempotency retry test above does.
+    const result=await savings('teacher').settleMaturities([{contractId:'early',studentId:'one',studentName:'가상시민',principalMinor:10000,interestMinor:1500,payoutMinor:11500,maturityAt:'2099-01-01',journalId:'interest~early',alreadyPaid:false}]);
+    expect(result).toEqual({paid:0,skipped:0,failed:1});
+    await env.withSecurityRulesDisabled(async c=>{
+      const contract=await c.firestore().doc('schools/a/savings/early').get();
+      expect(contract.data()?.status).toBe('active'); // untouched — Rules rejected the transaction
+    });
+  });
 });
