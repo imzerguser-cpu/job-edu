@@ -7,7 +7,7 @@ export interface TaskData {templates:TaskTemplate[];tasks:Task[]}
 // ever keeps the latest submissionText, overwritten on resubmission. Photo bytes are never
 // archived here (D-37 keeps those short-lived and deleted at review time); only the caption text.
 export interface TaskSubmissionEntry {id:string;schoolId:string;taskId:string;studentId:string;attempt:number;verificationKind:VerificationKind;submissionText:string;submittedAt:string}
-export const verificationKindNames:Record<VerificationKind,string>={artifact:'결과물 제출',photo:'사진 인증(다음 단계)',system:'자동 인증(다음 단계)'};
+export const verificationKindNames:Record<VerificationKind,string>={artifact:'결과물 제출',photo:'사진 인증',system:'자동 인증(다음 단계)'};
 export const taskStatusNames:Record<TaskStatus,string>={assigned:'수행 중',submitted:'검토 대기',approved:'완료',revision_requested:'다시 제출'};
 export function validateTemplate(t:TaskTemplate){
   if(!t.title.trim()||t.title.length>60)throw new Error('업무 제목을 1~60자로 적어 주세요.');

@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useCallback,useEffect,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
 import {listActiveStudents} from '../../data/schoolRepository';
 import {firebase} from '../../data/firebase';
@@ -19,9 +19,11 @@ import {StoreWorkspace} from '../business/StoreWorkspace';
 import {CivicWorkspace} from '../civic/CivicWorkspace';
 import {ViolationWorkspace} from '../civic/ViolationWorkspace';
 import {CitizenMap} from './CitizenMap';
-import {DestinationIcon} from './DestinationIcon';
-import {BuildingShell} from './BuildingShell';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
+import {GameWindow,type GameTab} from './GameWindow';
+import {CharacterHud,CharacterPicker,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,loadCharacter,markLevelSeen,saveCharacter,type CharacterId} from './CitizenGrowth';
+import {loadGrowthStats} from './growthStats';
+import {levelInfo,totalXp,type GrowthStats} from '../../domain/growth';
 import {GuideWorkspace} from './GuideWorkspace';
 import {buildings,type BuildingId} from './buildings';
 
@@ -34,51 +36,72 @@ function hasSeenGuide(studentId:string){try{return localStorage.getItem(guideSee
 function markGuideSeen(studentId:string){try{localStorage.setItem(guideSeenKey(studentId),'1')}catch{/* private mode etc. — fine to show again next time */}}
 
 export function StudentHome({citizen,school,context,store,taskStore,financeStore,savingsStore,loanStore,productStore,businessStore,proposalStore,violationStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;businessStore:BusinessStore;proposalStore:ProposalStore;violationStore:ViolationStore}){
-  const [view,setView]=useState<'map'|BuildingId|'guide'>(()=>hasSeenGuide(citizen.id)?'map':'guide');
-  const [jobCount,setJobCount]=useState<number|null>(null);
+  // 'growth'/'character'는 건물이 아니라 HUD에서 여는 창이다.
+  const [view,setView]=useState<'map'|BuildingId|'guide'|'growth'|'character'>(()=>hasSeenGuide(citizen.id)?'map':'guide');
   const [roster,setRoster]=useState<Student[]>([citizen]);
+  const [stats,setStats]=useState<GrowthStats|null>(null);
+  const [refresh,setRefresh]=useState(0);
+  const [character,setCharacter]=useState<CharacterId>(()=>loadCharacter(citizen.id));
+  const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
   useEffect(()=>{
     let alive=true;
-    store.load().then(d=>{if(alive)setJobCount(d.assignments.filter(a=>a.status==='active'&&a.studentId===citizen.id).length)}).catch(()=>{if(alive)setJobCount(null)});
+    loadGrowthStats({careerStore:store,taskStore,financeStore,savingsStore,loanStore,proposalStore},citizen.id).then(next=>{
+      if(!alive)return;
+      setStats(next);
+      const info=levelInfo(totalXp(next)),seen=lastSeenLevel(citizen.id);
+      // 처음 접속한 기기에서는 축하 없이 현재 레벨만 기억한다(이미 쌓은 레벨로 매번 축하하지 않게).
+      if(seen!==null&&info.level>seen)setLevelUp({level:info.level,title:info.title});
+      markLevelSeen(citizen.id,info.level);
+    });
     return ()=>{alive=false};
-  },[store,citizen.id]);
+  },[store,taskStore,financeStore,savingsStore,loanStore,proposalStore,citizen.id,refresh]);
   useEffect(()=>{
     let alive=true;
     if(firebase)listActiveStudents(firebase.db,context).then(list=>{if(alive)setRoster(list)}).catch(()=>{if(alive)setRoster([citizen])});
     return ()=>{alive=false};
   },[context,citizen]);
   function closeGuide(){markGuideSeen(citizen.id);setView('map')}
+  // 창을 닫을 때마다 성장 기록을 다시 계산한다 — 방금 제출·구매·가입한 것이 바로 경험치에 반영되도록.
+  const closeWindow=useCallback(()=>{setView('map');setRefresh(n=>n+1)},[]);
 
   if(view==='guide')return <GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>;
 
-  if(view==='map')return <div className="citizen-shell">
-    <CitizenHud citizen={citizen} community={school.communityName} jobCount={jobCount} onGuide={()=>setView('guide')}/>
+  const studentId=context.membership.studentId??undefined;
+  const work=(icons:string[])=>[
+    {id:'tasks',icon:'📋',label:'오늘의 업무',content:<TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={studentId} iconFilter={icons}/>},
+    {id:'jobs',icon:'💼',label:'여기서 일하기',content:<CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={studentId} departmentNames={school.departmentNames} iconFilter={icons}/>},
+  ] satisfies GameTab[];
+
+  let win:ReactNode=null;
+  if(view==='growth')win=<GameWindow title="나의 성장 기록" subtitle="레벨·업적·경험치를 확인해요" tabs={[{id:'growth',icon:'🏅',label:'성장 기록',content:<GrowthPanel stats={stats}/>}]} onClose={closeWindow}/>;
+  else if(view==='character')win=<GameWindow title="내 캐릭터" subtitle="마을에서 나를 보여 줄 캐릭터를 골라요" tabs={[{id:'pick',icon:'🧑',label:'캐릭터',content:<CharacterPicker current={character} onPick={id=>{setCharacter(id);saveCharacter(citizen.id,id)}} onClose={()=>setView('map')}/>}]} onClose={()=>setView('map')}/>;
+  else if(view!=='map'){
+    const building=buildings.find(b=>b.id===view)!;
+    const eyebrow=building.departmentId?departmentDisplayName(school,building.departmentId):undefined;
+    // 은행·상점도 "쓰는 곳"이면서 동시에 "일하는 곳"이다 — 은행원·카페 직원·매점 관리원이
+    // 자기 일터에서 업무를 찾을 수 있도록 일하기 탭을 함께 붙인다(이전엔 마이페이지에서만 보였음).
+    const tabs:GameTab[]=view==='mypage'?[
+      {id:'jobs',icon:'🪪',label:'내 직업',content:<CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={studentId} departmentNames={school.departmentNames}/>},
+      {id:'tasks',icon:'📋',label:'모든 업무',content:<TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={studentId}/>},
+      {id:'civic',icon:'🗳️',label:'시민광장',content:<CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={studentId}/>},
+      {id:'report',icon:'🚨',label:'신고·과태료',content:<ViolationWorkspace store={violationStore} teacher={false} students={roster} studentId={citizen.id} currencySymbol={school.currencyName}/>},
+      {id:'growth',icon:'🏅',label:'성장 기록',content:<GrowthPanel stats={stats}/>},
+    ]:view==='bank'?[
+      {id:'bank',icon:'🏦',label:'은행 창구',content:<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>},
+      ...work(building.icons??[]),
+    ]:view==='store'?[
+      {id:'shop',icon:'🛍️',label:'카페·매점 이용',content:<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName} studentId={citizen.id}/>},
+      ...work(building.icons??[]),
+    ]:building.icons?work(building.icons)
+    :[{id:'soon',icon:'🚧',label:'준비 중',content:<BuildingPlaceholder label={building.label}/>}];
+    win=<GameWindow key={view} buildingId={building.id} title={building.label} subtitle={building.subtitle} eyebrow={eyebrow} tabs={tabs} onClose={closeWindow}/>;
+  }
+
+  return <div className="citizen-shell">
+    <CharacterHud citizen={citizen} community={school.communityName} character={character} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')}/>
+    {levelUp&&<LevelUpToast level={levelUp.level} title={levelUp.title} onClose={()=>setLevelUp(null)}/>}
+    <QuestBoard stats={stats} onGo={setView}/>
     <CitizenMap onNavigate={setView}/>
+    {win}
   </div>;
-
-  const building=buildings.find(b=>b.id===view)!;
-  const deptEyebrow=building.departmentId?departmentDisplayName(school,building.departmentId):undefined;
-  return <BuildingShell title={building.label} subtitle={building.subtitle} eyebrow={deptEyebrow} onBack={()=>setView('map')}>
-    {view==='mypage'
-      ?<><CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined} departmentNames={school.departmentNames}/>
-        <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
-        <CivicWorkspace store={proposalStore} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined}/>
-        <ViolationWorkspace store={violationStore} teacher={false} students={roster} studentId={citizen.id} currencySymbol={school.currencyName}/></>
-      :view==='bank'
-      ?<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>
-      :view==='store'
-      ?<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName} studentId={citizen.id}/>
-      :building.icons
-      ?<><CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined} departmentNames={school.departmentNames} iconFilter={building.icons}/>
-        <TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={context.membership.studentId??undefined} iconFilter={building.icons}/></>
-      :<BuildingPlaceholder label={building.label}/>}
-  </BuildingShell>;
-}
-
-function CitizenHud({citizen,community,jobCount,onGuide}:{citizen:Student;community:string;jobCount:number|null;onGuide:()=>void}){
-  return <aside className="citizen-hud">
-    <div className="citizen-hud-top"><span className="citizen-hud-eyebrow">{community}</span><button type="button" className="button quiet small" onClick={onGuide}>📖 설명서</button></div>
-    <div className="citizen-hud-profile"><DestinationIcon id="mypage"/><div><b>{citizen.name} 시민</b><small>{citizen.grade}학년 · {citizen.className??'반 미지정'}</small></div></div>
-    <div className="citizen-hud-stat"><span>현재 맡은 직업</span><b>{jobCount===null?'확인 중…':`${jobCount}개`}</b></div>
-  </aside>;
 }

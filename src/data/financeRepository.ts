@@ -8,6 +8,9 @@ export interface FinanceStore {
   ensureCommunityFund():Promise<void>;
   myAccount():Promise<Account|null>;
   myEntries():Promise<AccountEntry[]>;
+  // 성장(레벨) 계산용: 내 계좌 거래 중 특정 종류가 몇 번 있었는지(최대 100) — myEntries()는
+  // 최근 20건만 보여 주므로 오래된 월급·구매가 빠지지 않도록 종류별로 따로 센다.
+  myEntryCount(type:'SALARY'|'PURCHASE'):Promise<number>;
   previewSalary(period:string):Promise<SalaryPreviewItem[]>;
   settleSalary(items:SalaryPreviewItem[]):Promise<{paid:number;skipped:number;failed:number}>;
   previewIncomeTax(period:string,rateBp:number):Promise<IncomeTaxPreviewItem[]>;
@@ -48,6 +51,12 @@ export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStor
       const studentId=assertApplicant(context);
       const snap=await getDocsFromServer(query(collection(ref('accounts',studentId),'entries'),orderBy('postedAt','desc'),limit(20)));
       return snap.docs.map(d=>({...d.data(),id:d.id} as AccountEntry));
+    },
+    async myEntryCount(type){
+      const studentId=assertApplicant(context);
+      const snap=await getDocsFromServer(query(collection(ref('accounts',studentId),'entries'),where('type','==',type),limit(100)));
+      // 구매는 음수(내가 낸 돈)만 센다 — 사업 계좌가 아니라 내 계좌이므로 사실상 전부 해당.
+      return type==='PURCHASE'?snap.docs.filter(d=>(d.data().deltaMinor??0)<0).length:snap.size;
     },
     async previewSalary(period){
       teacher();

@@ -111,3 +111,14 @@ describe('월급 정산',()=>{
     await assertFails(updateDoc(doc(db('a-one'),'schools/b/accounts/one'),{balanceMinor:1}));
   });
 });
+describe('성장 기록용 거래 횟수',()=>{
+  it('학생은 자기 계좌의 월급 횟수를 셀 수 있고, 구매가 없으면 0이다',async()=>{
+    const teacher=store('teacher');
+    await teacher.ensureIssuer();
+    await teacher.settleSalary(await teacher.previewSalary('2026-09'));
+    const me=store('student','a','one');
+    expect(await me.myEntryCount('SALARY')).toBe(1);
+    expect(await me.myEntryCount('PURCHASE')).toBe(0);
+    expect(await store('student','a','two').myEntryCount('SALARY')).toBe(0);
+  });
+});
