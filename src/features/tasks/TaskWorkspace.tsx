@@ -6,13 +6,16 @@ import type {Student} from '../../domain/model';
 import type {TaskStore} from '../../data/taskRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import {compressImageToBase64} from '../../ui/imageCompress';
+import {taskPresets} from '../../domain/taskPresets';
+import {formatMoney,toMajor,toMinor} from '../../domain/money';
 
-export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string;iconFilter?:string[]}){
+export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter,currencySymbol='마동'}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string;iconFilter?:string[];currencySymbol?:string}){
   const [data,setData]=useState<TaskData>({templates:[],tasks:[]});
   const [jobs,setJobs]=useState<Career[]>([]);
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [view,setView]=useState<'templates'|'assign'|'review'>('templates');
   const [editing,setEditing]=useState<TaskTemplate|null>(null);
+  const [formKey,setFormKey]=useState(0);
   const [submittingTask,setSubmittingTask]=useState<Task|null>(null);
   const [photoFile,setPhotoFile]=useState<File|null>(null);
   const mounted=useRef(true);
@@ -43,6 +46,7 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
   }
 
   const templateTitle=(id:string)=>data.templates.find(t=>t.id===id)?.title??id;
+  const templateReward=(id:string)=>data.templates.find(t=>t.id===id)?.rewardMinor??0;
   const jobName=(id:string)=>jobs.find(j=>j.id===id)?.name??id;
   const studentName=(id:string)=>students.find(s=>s.id===id)?.name??'현재 명단 밖의 시민';
   // A building on the student map scopes this to just its own jobs' tasks (StudentHome passes
@@ -59,6 +63,7 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
       {!myTasks.length?<p className="empty">{scopedJobIds?'이 건물에서 할 업무가 아직 없어요.':'아직 배정된 업무가 없어요.'}</p>:<div className="list">
         {myTasks.map(task=><article key={task.id} className="task-row">
           <div className="task-row-head"><b>{templateTitle(task.templateId)}</b><span className="badge">{taskStatusNames[task.status]}</span></div>
+          {templateReward(task.templateId)>0&&<p className="reward-tag">🎁 완료 보상 +{formatMoney(templateReward(task.templateId),currencySymbol)} (선생님이 승인하면 바로 들어와요)</p>}
           {task.reviewNote&&<p className="review-note">선생님 의견: {task.reviewNote}</p>}
           {task.attempt>0&&<TaskSubmissionHistoryButton taskStore={taskStore} taskId={task.id}/>}
           {(task.status==='assigned'||task.status==='revision_requested')&&(submittingTask?.id===task.id
@@ -87,16 +92,18 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
     {view==='templates'&&<section className="panel section">
       <div className="section-heading"><h3>업무 목록</h3><button className="button primary" disabled={!jobs.length} onClick={()=>setEditing({id:crypto.randomUUID(),schoolId:'',jobId:jobs[0]?.id??'',title:'',instructions:'',verificationKind:'artifact',status:'active',schemaVersion:1})}>+ 업무 만들기</button></div>
       {!jobs.length&&<p className="empty">먼저 직업을 만들어야 업무를 등록할 수 있어요.</p>}
-      {editing&&<form className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>taskStore.saveTemplate({...editing,jobId:String(f.get('job')),title:String(f.get('title')).trim(),instructions:String(f.get('instructions')).trim(),verificationKind:f.get('kind') as VerificationKind,status:f.get('status') as TaskTemplate['status']}),'업무를 저장했습니다.')}}>
-        <label>소속 직업<select name="job" defaultValue={editing.jobId} required>{jobs.map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></label>
+      {editing&&<form key={formKey} className="action-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>taskStore.saveTemplate({...editing,jobId:String(f.get('job')),title:String(f.get('title')).trim(),instructions:String(f.get('instructions')).trim(),verificationKind:f.get('kind') as VerificationKind,status:f.get('status') as TaskTemplate['status'],rewardMinor:toMinor(Number(f.get('reward'))||0)}),'업무를 저장했습니다.')}}>
+        <label>소속 직업<select name="job" defaultValue={editing.jobId} required onChange={e=>setEditing({...editing,jobId:e.target.value})}>{jobs.map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></label>
+        {(()=>{const icon=jobs.find(j=>j.id===editing.jobId)?.icon,presets=icon?taskPresets[icon]??[]:[];return presets.length>0&&<div className="preset-box"><span className="muted">추천 업무에서 골라 채우기:</span>{presets.map(p=><button key={p.title} type="button" className="button quiet small" onClick={()=>{setEditing({...editing,title:p.title,instructions:p.instructions,verificationKind:p.kind,rewardMinor:toMinor(p.reward)});setFormKey(k=>k+1)}}>{p.title}</button>)}</div>})()}
         <label>업무 제목<input autoFocus name="title" defaultValue={editing.title} required maxLength={60}/></label>
         <label>안내 내용<textarea name="instructions" defaultValue={editing.instructions} required maxLength={1000} rows={3}/></label>
         <label>인증 방식<select name="kind" defaultValue={editing.verificationKind}><option value="artifact">{verificationKindNames.artifact}</option><option value="photo">{verificationKindNames.photo}</option></select></label>
         <label>운영 상태<select name="status" defaultValue={editing.status}><option value="active">운영 중</option><option value="archived">보관</option></select></label>
+        <label>완료 보상({currencySymbol}, 승인하는 순간 학생 계좌로 바로 지급 · 0이면 없음)<input name="reward" type="number" min={0} max={1000} step={1} defaultValue={toMajor(editing.rewardMinor??0)}/></label>
         <p className="muted">자동 인증(도서 대여 등 실제 이벤트 연동)은 다음 단계에서 추가됩니다.</p>
         <div className="header-actions"><button className="button primary" disabled={busy}>저장</button><button type="button" className="button quiet" onClick={()=>setEditing(null)}>취소</button></div>
       </form>}
-      {!data.templates.length?<p className="empty">아직 만든 업무가 없어요.</p>:<div className="list">{data.templates.map(t=><article key={t.id} className="task-row"><div className="task-row-head"><b>{t.title}</b><span className="badge">{jobName(t.jobId)}</span></div><p>{t.instructions}</p><p className="muted">{verificationKindNames[t.verificationKind]} · {t.status==='active'?'운영 중':'보관'}</p><button className="button quiet" onClick={()=>setEditing(t)}>수정</button></article>)}</div>}
+      {!data.templates.length?<p className="empty">아직 만든 업무가 없어요.</p>:<div className="list">{data.templates.map(t=><article key={t.id} className="task-row"><div className="task-row-head"><b>{t.title}</b><span className="badge">{jobName(t.jobId)}</span></div><p>{t.instructions}</p><p className="muted">{verificationKindNames[t.verificationKind]} · {t.status==='active'?'운영 중':'보관'}{(t.rewardMinor??0)>0?` · 완료 보상 ${formatMoney(t.rewardMinor!,currencySymbol)}`:''}</p><button className="button quiet" onClick={()=>setEditing(t)}>수정</button></article>)}</div>}
     </section>}
     {view==='assign'&&<section className="panel section">
       <h3>업무 배정</h3>

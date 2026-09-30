@@ -2,6 +2,7 @@ import {useState} from 'react';
 import {achievements,levelInfo,quests,totalXp,xpBreakdown,type GrowthStats} from '../../domain/growth';
 import type {Student} from '../../domain/model';
 import {buildings,type BuildingId} from './buildings';
+import {hollandInfo,type HollandType} from '../../domain/careerDiscovery';
 
 export const characters=['blue','cap','glasses','green','pink','purple','teal','yellow'] as const;
 export type CharacterId=typeof characters[number];
@@ -22,7 +23,7 @@ function levelKey(studentId:string){return `jobedu-level-seen-${studentId}`}
 export function lastSeenLevel(studentId:string){try{const n=Number(localStorage.getItem(levelKey(studentId)));return Number.isInteger(n)&&n>0?n:null}catch{return null}}
 export function markLevelSeen(studentId:string,level:number){try{localStorage.setItem(levelKey(studentId),String(level))}catch{/* 다음에 다시 축하해도 괜찮다 */}}
 
-export function CharacterHud({citizen,community,character,stats,jobCount,onGuide,onGrowth,onPickCharacter}:{citizen:Student;community:string;character:CharacterId;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void}){
+export function CharacterHud({citizen,community,character,stats,jobCount,onGuide,onGrowth,onPickCharacter,onDiscover}:{citizen:Student;community:string;character:CharacterId;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void;onDiscover:()=>void}){
   const info=stats?levelInfo(totalXp(stats)):null;
   return <aside className="citizen-hud game-hud">
     <button type="button" className="hud-avatar" onClick={onPickCharacter} aria-label="내 캐릭터 바꾸기">
@@ -30,7 +31,8 @@ export function CharacterHud({citizen,community,character,stats,jobCount,onGuide
       <span className="hud-level">{info?`Lv.${info.level}`:'Lv.?'}</span>
     </button>
     <div className="hud-main">
-      <div className="citizen-hud-top"><span className="citizen-hud-eyebrow">{community}</span><span className="hud-title">{info?.title??'성장 기록 확인 중…'}</span></div>
+      <div className="citizen-hud-top"><span className="citizen-hud-eyebrow">{community}</span><span className="hud-title">{info?.title??'성장 기록 확인 중…'}</span>
+        {stats?.discoveryCode&&<button type="button" className="hud-type" onClick={onDiscover} title="나를 찾는 모험 결과 보기">{stats.discoveryCode.split('').map(t=>hollandInfo[t as HollandType].icon+' '+hollandInfo[t as HollandType].name).join(' · ')}</button>}</div>
       <b className="hud-name">{citizen.name} 시민 <small>{citizen.grade}학년 · {citizen.className??'반 미지정'}</small></b>
       <div className="xp-bar" role="progressbar" aria-label="다음 레벨까지 경험치" aria-valuemin={0} aria-valuemax={100} aria-valuenow={info?Math.round(info.progress*100):0}>
         <span style={{width:`${info?Math.round(info.progress*100):0}%`}}/>
@@ -40,6 +42,7 @@ export function CharacterHud({citizen,community,character,stats,jobCount,onGuide
     <div className="hud-side">
       <div className="citizen-hud-stat"><span>맡은 직업</span><b>{jobCount===null?'…':`${jobCount}개`}</b></div>
       <div className="hud-buttons">
+        <button type="button" className="button secondary small" onClick={onDiscover}>🧭 나를 찾기</button>
         <button type="button" className="button secondary small" onClick={onGrowth}>🏅 성장 기록</button>
         <button type="button" className="button quiet small" onClick={onGuide}>📖 설명서</button>
       </div>
@@ -47,14 +50,14 @@ export function CharacterHud({citizen,community,character,stats,jobCount,onGuide
   </aside>;
 }
 
-export function QuestBoard({stats,onGo}:{stats:GrowthStats|null;onGo:(id:BuildingId)=>void}){
+export function QuestBoard({stats,onGo}:{stats:GrowthStats|null;onGo:(id:BuildingId,tab?:string)=>void}){
   if(!stats)return null;
   const list=quests(stats);
   const place=(id:BuildingId)=>buildings.find(b=>b.id===id)?.label??'';
   return <section className="quest-board" aria-label="지금 할 수 있는 모험">
     <h2>⚔️ 지금 할 수 있는 모험</h2>
     {!list.length?<p className="quest-empty">대단해요! 지금 할 모험을 모두 끝냈어요. 친구를 도와 볼까요?</p>
-      :<div className="quest-list">{list.map(q=><button key={q.id} type="button" className="quest-card" onClick={()=>onGo(q.target)}>
+      :<div className="quest-list">{list.map(q=><button key={q.id} type="button" className="quest-card" onClick={()=>onGo(q.target,q.tab)}>
         <span className="quest-icon" aria-hidden="true">{q.icon}</span>
         <span className="quest-text"><b>{q.title}</b><small>{q.desc}</small></span>
         <span className="quest-reward">+{q.xp} XP<small>{place(q.target)}로 ↗</small></span>

@@ -250,9 +250,11 @@ service cloud.firestore {
       function templateShape() {
         let d=request.resource.data;
         return d.keys().hasAll(['schoolId','jobId','title','instructions','verificationKind','status','schemaVersion','createdAt','updatedAt'])
-          && d.keys().hasOnly(['schoolId','jobId','title','instructions','verificationKind','status','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','jobId','title','instructions','verificationKind','status','rewardMinor','schemaVersion','createdAt','updatedAt'])
           && d.schoolId==sid && d.schemaVersion==1
           && d.jobId.matches('^[A-Za-z0-9_-]{1,100}$')
+          // 완료 즉시 보상(D-104) — 이 필드가 생기기 전 업무는 없어도 된다(.get으로 읽는 이유는 D-66).
+          && d.get('rewardMinor',0) is int && d.get('rewardMinor',0)>=0 && d.get('rewardMinor',0)<=100000
           && d.title is string && d.title.size()>0 && d.title.size()<=60
           && d.instructions is string && d.instructions.size()>0 && d.instructions.size()<=1000
           && d.verificationKind in ['artifact','photo','system']
@@ -402,7 +404,11 @@ service cloud.firestore {
           || (j.type=='INCOME_TAX' && teacher(sid))
           || (j.type=='BUSINESS_TAX' && teacher(sid))
           || (j.type=='FINE' && teacher(sid))
-          || (j.type=='FUND_EXPENSE' && teacher(sid));
+          || (j.type=='FUND_EXPENSE' && teacher(sid))
+          || (j.type=='TASK_REWARD' && teacher(sid))
+          || (j.type=='HELP_ESCROW' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
+          || (j.type=='HELP_REFUND' && (teacher(sid) || (activeStudent(sid) && callerStudentId(sid)==j.studentId)))
+          || (j.type=='HELP_REWARD' && activeStudent(sid) && callerStudentId(sid)==j.studentId);
       }
       // Money never moves without an immutable journal: every account write must reference
       // (via lastJournalId + getAfter) a journal created in the very same transaction whose
@@ -454,6 +460,13 @@ service cloud.firestore {
               && getAfter(businessPath(accountId)).data.schoolId==sid
               && request.resource.data.balanceMinor==0 && request.resource.data.lastJournalId==null)
           );
+        // 도움 보상(D-105)은 도와준 학생이 직접 받아 가는데, 그 학생이 아직 월급을 받은 적이
+        // 없으면 계좌가 없다 — 이때만 학생이 자기 계좌를 만들 수 있다(같은 트랜잭션의 HELP_REWARD 입금으로만).
+        allow create: if ownStudent(sid,accountId) && accountShape()
+          && request.resource.data.version==0 && request.resource.data.createdAt==request.time
+          && request.resource.data.ownerType=='student' && request.resource.data.ownerId==accountId
+          && request.resource.data.lastJournalId!=null && creditedOnCreate()
+          && getAfter(journalPath(request.resource.data.lastJournalId)).data.type=='HELP_REWARD';
         // No role wildcard here: a teacher may only move the SALARY side, a student only their
         // own PURCHASE side, enforced entirely inside creditedHere()/debitedHere() above.
         allow update: if accountShape()
@@ -469,7 +482,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE','FUND_EXPENSE']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE','FUND_EXPENSE','TASK_REWARD','HELP_ESCROW','HELP_REFUND','HELP_REWARD']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -727,6 +740,19 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=1000000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // 업무 완료 즉시 보상(D-104): 교사가 제출을 승인하는 바로 그 트랜잭션에서만, 업무 템플릿에
+      // 걸린 금액 그대로. id에 시도 번호가 들어가 같은 제출로 두 번 받을 수 없다.
+      function taskRewardJournalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','taskId','attempt','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','taskId','attempt','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.studentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.taskId.matches('^[A-Za-z0-9_~-]{1,201}$')
+          && d.attempt is int && d.attempt>=1
+          && d.debitAccountId=='system-issuer' && d.creditAccountId==d.studentId
+          && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=100000
+          && d.postedBy==request.auth.uid && d.createdAt==request.time;
+      }
       match /journals/{journalId} {
         allow get: if teacher(sid);
         allow list: if teacher(sid) && bounded();
@@ -754,13 +780,13 @@ service cloud.firestore {
         let isActiveStudent = activeStudent(sid);
         let myStudentId = isActiveStudent ? callerStudentId(sid) : null;
         return
-          (isTeacher && salaryJournalShape() && d.type=='SALARY'
+          (d.type=='SALARY' && isTeacher && salaryJournalShape()
             && journalId==('salary~'+d.jobId+'~'+d.studentId+'~'+d.period)
             && get(jobPath(d.jobId)).data.salaryMinor==d.amountMinor
             && get(assignmentPath(d.jobId+'~'+d.studentId)).data.status=='active'
             && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active')
           ||
-          (journalId.matches('^[A-Za-z0-9_-]{1,100}$') && purchaseJournalShape() && d.type=='PURCHASE'
+          (d.type=='PURCHASE' && journalId.matches('^[A-Za-z0-9_-]{1,100}$') && purchaseJournalShape()
             && isActiveStudent && myStudentId==d.buyerStudentId
             && get(businessPath(d.businessId)).data.status=='active'
             && get(productPath(d.productId)).data.businessId==d.businessId
@@ -769,12 +795,12 @@ service cloud.firestore {
             && get(productPath(d.productId)).data.priceMinor==d.amountMinor
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.buyerStudentId)).data.balanceMinor>=d.amountMinor)
           ||
-          (studentToIssuerJournalShape() && d.type=='SAVINGS_DEPOSIT'
+          (d.type=='SAVINGS_DEPOSIT' && studentToIssuerJournalShape()
             && isActiveStudent && myStudentId==d.studentId
             && journalId==('savingsDeposit~'+d.contractId)
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
-          (isTeacher && issuerToStudentJournalShape() && d.type=='INTEREST'
+          (d.type=='INTEREST' && isTeacher && issuerToStudentJournalShape()
             && journalId==('interest~'+d.contractId)
             && get(savingsPath(d.contractId)).data.studentId==d.studentId
             && get(savingsPath(d.contractId)).data.status=='active')
@@ -782,7 +808,7 @@ service cloud.firestore {
           // Loan disbursement: only as part of approving the matching financialRequests/{contractId}
           // (still 'reviewed' pre-transaction here, since the request's own update to 'approved'
           // happens in the same transaction) — amount must equal exactly what was requested.
-          (isTeacher && issuerToStudentJournalShape() && d.type=='LOAN'
+          (d.type=='LOAN' && isTeacher && issuerToStudentJournalShape()
             && journalId==('loan~'+d.contractId)
             && get(financialRequestPath(d.contractId)).data.status=='reviewed'
             && get(financialRequestPath(d.contractId)).data.operation=='LOAN'
@@ -795,7 +821,7 @@ service cloud.firestore {
           // a given payment is still cross-checked against the loan doc's own update in the same
           // tx (loanRepaymentOk), not re-derived here; this only bounds it so it can never exceed
           // the outstanding total and never drive the student's balance negative.
-          (studentToIssuerJournalShape() && d.type=='LOAN_REPAYMENT'
+          (d.type=='LOAN_REPAYMENT' && studentToIssuerJournalShape()
             && isActiveStudent && myStudentId==d.studentId
             && journalId.matches('^loanRepayment~'+d.contractId+'~[0-9]+$')
             && get(loanPath(d.contractId)).data.studentId==d.studentId
@@ -808,14 +834,14 @@ service cloud.firestore {
           // from summing SALARY journals in Rules, which can't aggregate across documents. The
           // hard invariants Rules do enforce: target student is active, and the debit can never
           // drive their balance negative.
-          (isTeacher && incomeTaxJournalShape() && d.type=='INCOME_TAX'
+          (d.type=='INCOME_TAX' && isTeacher && incomeTaxJournalShape()
             && journalId==('tax~'+d.studentId+'~'+d.period)
             && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.studentId)).data.status=='active'
             && get(/databases/$(database)/documents/schools/$(sid)/accounts/$(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
           // Business tax: same trust tier as INCOME_TAX (teacher-session, amount trusted from the
           // app-computed preview) — debits the business's own account instead of a student's.
-          (isTeacher && businessTaxJournalShape() && d.type=='BUSINESS_TAX'
+          (d.type=='BUSINESS_TAX' && isTeacher && businessTaxJournalShape()
             && journalId==('businessTax~'+d.businessId+'~'+d.period)
             && get(businessPath(d.businessId)).data.status=='active'
             && get(accountPath(d.businessId)).data.balanceMinor>=d.amountMinor)
@@ -823,15 +849,49 @@ service cloud.firestore {
           // Fine: only as part of deciding the matching violationReports/{reportId} (still
           // 'submitted' pre-transaction here, since the report's own update to 'fined' happens in
           // the same transaction) — target student and amount must match the report being decided.
-          (isTeacher && fineJournalShape() && d.type=='FINE'
+          (d.type=='FINE' && isTeacher && fineJournalShape()
             && journalId==('fine~'+d.reportId)
             && get(violationReportPath(d.reportId)).data.status=='submitted'
             && get(violationReportPath(d.reportId)).data.targetStudentId==d.studentId
             && get(accountPath(d.studentId)).data.balanceMinor>=d.amountMinor)
           ||
-          (isTeacher && fundExpenseJournalShape() && d.type=='FUND_EXPENSE'
+          (d.type=='FUND_EXPENSE' && isTeacher && fundExpenseJournalShape()
             && journalId.matches('^[A-Za-z0-9_~-]{1,100}$')
-            && get(accountPath('community-fund')).data.balanceMinor>=d.amountMinor);
+            && get(accountPath('community-fund')).data.balanceMinor>=d.amountMinor)
+          ||
+          (d.type=='TASK_REWARD' && isTeacher && taskRewardJournalShape()
+            && journalId==('taskReward~'+d.taskId+'~'+string(d.attempt))
+            && get(taskPath(d.taskId)).data.assigneeStudentId==d.studentId
+            && get(taskPath(d.taskId)).data.status=='submitted'
+            && get(taskPath(d.taskId)).data.attempt==d.attempt
+            && getAfter(taskPath(d.taskId)).data.status=='approved'
+            && get(taskTemplatePath(get(taskPath(d.taskId)).data.templateId)).data.get('rewardMinor',0)==d.amountMinor)
+          ||
+          // 도움 게시판(D-105): 보상은 요청할 때 발행 계좌에 맡기고(ESCROW), 취소하면 돌려받고(REFUND),
+          // 요청자가 확인하면 도와준 학생이 받아 간다(REWARD). 금액은 항상 요청 문서의 rewardMinor 그대로.
+          (d.type=='HELP_ESCROW' && studentToIssuerJournalShape()
+            && isActiveStudent && myStudentId==d.studentId
+            && journalId==('helpEscrow~'+d.contractId)
+            && !exists(helpPath(d.contractId))
+            && getAfter(helpPath(d.contractId)).data.requesterStudentId==d.studentId
+            && getAfter(helpPath(d.contractId)).data.rewardMinor==d.amountMinor
+            && get(accountPath(d.studentId)).data.balanceMinor>=d.amountMinor)
+          ||
+          (d.type=='HELP_REFUND' && issuerToStudentJournalShape()
+            && journalId==('helpRefund~'+d.contractId)
+            && (isTeacher || (isActiveStudent && myStudentId==d.studentId))
+            && get(helpPath(d.contractId)).data.requesterStudentId==d.studentId
+            && get(helpPath(d.contractId)).data.rewardMinor==d.amountMinor
+            && get(helpPath(d.contractId)).data.status in ['open','accepted','done']
+            && getAfter(helpPath(d.contractId)).data.status=='cancelled')
+          ||
+          (d.type=='HELP_REWARD' && issuerToStudentJournalShape()
+            && isActiveStudent && myStudentId==d.studentId
+            && journalId==('helpReward~'+d.contractId)
+            && get(helpPath(d.contractId)).data.helperStudentId==d.studentId
+            && get(helpPath(d.contractId)).data.status=='confirmed'
+            && get(helpPath(d.contractId)).data.rewardMinor==d.amountMinor
+            && getAfter(helpPath(d.contractId)).data.status=='paid');
       }
       function financialRequestPath(id) { return /databases/$(database)/documents/schools/$(sid)/financialRequests/$(id); }
       function financeReviewPath(id) { return /databases/$(database)/documents/schools/$(sid)/financeReviews/$(id); }
@@ -1242,6 +1302,155 @@ service cloud.firestore {
         allow list: if teacher(sid) && bounded();
         allow create: if teacher(sid) && auditLogShape();
         allow update, delete: if false;
+      }
+      // ── 도움 요청 게시판(D-105) ──
+      function helpPath(id) { return /databases/$(database)/documents/schools/$(sid)/helpRequests/$(id); }
+      function helpShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','requesterStudentId','title','description','rewardMinor','status','helperStudentId','doneNote','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','requesterStudentId','title','description','rewardMinor','status','helperStudentId','doneNote','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.requesterStudentId is string && d.requesterStudentId.matches('^[A-Za-z0-9_-]{1,100}$')
+          && d.title is string && d.title.size()>0 && d.title.size()<=60
+          && d.description is string && d.description.size()<=500
+          && d.rewardMinor is int && d.rewardMinor>=0 && d.rewardMinor<=100000
+          && d.status in ['open','accepted','done','confirmed','paid','cancelled']
+          && (d.helperStudentId==null || (d.helperStudentId is string && d.helperStudentId.matches('^[A-Za-z0-9_-]{1,100}$')))
+          && d.doneNote is string && d.doneNote.size()<=500
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      // 한 번에 한 칸씩만 상태가 움직이고, 상태마다 움직일 수 있는 사람이 다르다.
+      function helpUpdateOk(reqId) {
+        let o=resource.data;
+        let n=request.resource.data;
+        let isT=teacher(sid);
+        let me=activeStudent(sid) ? callerStudentId(sid) : null;
+        let sameCore=n.requesterStudentId==o.requesterStudentId && n.title==o.title && n.description==o.description
+          && n.rewardMinor==o.rewardMinor && n.createdAt==o.createdAt;
+        return helpShape() && sameCore && (
+          // 다른 학생이 맡기
+          (me!=null && me!=o.requesterStudentId && o.status=='open' && n.status=='accepted' && n.helperStudentId==me && n.doneNote=='')
+          // 맡은 학생이 그만두기
+          || (me!=null && me==o.helperStudentId && o.status=='accepted' && n.status=='open' && n.helperStudentId==null && n.doneNote=='')
+          // 맡은 학생이 해냈다고 알리기
+          || (me!=null && me==o.helperStudentId && o.status=='accepted' && n.status=='done' && n.helperStudentId==o.helperStudentId && n.doneNote.size()>0)
+          // 요청자가 확인(보상 있으면 confirmed, 없으면 바로 paid) 또는 아직 덜 됐다고 돌려보내기
+          || (me!=null && me==o.requesterStudentId && o.status=='done' && n.helperStudentId==o.helperStudentId && n.doneNote==o.doneNote
+              && ((o.rewardMinor==0 && n.status=='paid') || (o.rewardMinor>0 && n.status=='confirmed') || n.status=='accepted'))
+          // 도와준 학생이 보상 받아 가기(같은 트랜잭션의 HELP_REWARD 저널 필수)
+          || (me!=null && me==o.helperStudentId && o.status=='confirmed' && n.status=='paid' && n.helperStudentId==o.helperStudentId && n.doneNote==o.doneNote
+              && existsAfter(journalPath('helpReward~'+reqId)))
+          // 취소: 요청자는 아무도 안 맡았을 때만, 교사는 보상 확정 전까지. 보상이 있으면 환불 저널 필수.
+          || (((me!=null && me==o.requesterStudentId && o.status=='open') || (isT && o.status in ['open','accepted','done']))
+              && n.status=='cancelled' && n.helperStudentId==o.helperStudentId && n.doneNote==o.doneNote
+              && (o.rewardMinor==0 || existsAfter(journalPath('helpRefund~'+reqId))))
+        );
+      }
+      match /helpRequests/{reqId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if activeStudent(sid) && reqId.matches('^[A-Za-z0-9_-]{1,100}$') && helpShape()
+          && request.resource.data.requesterStudentId==callerStudentId(sid)
+          && request.resource.data.status=='open' && request.resource.data.helperStudentId==null && request.resource.data.doneNote==''
+          && request.resource.data.createdAt==request.time
+          && (request.resource.data.rewardMinor==0 || existsAfter(journalPath('helpEscrow~'+reqId)));
+        allow update: if helpUpdateOk(reqId);
+        allow delete: if false;
+      }
+      // ── 칭찬 스티커(D-106) ── 같은 친구에게 하루(UTC) 한 번: id가 보낸이~받는이~날짜여야 한다.
+      function praiseCreateOk(praiseId) {
+        let d=request.resource.data;
+        let me=activeStudent(sid) ? callerStudentId(sid) : null;
+        return me!=null
+          && d.keys().hasAll(['schoolId','fromStudentId','toStudentId','category','message','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','fromStudentId','toStudentId','category','message','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1 && d.fromStudentId==me
+          && d.toStudentId is string && d.toStudentId.matches('^[A-Za-z0-9_-]{1,100}$') && d.toStudentId!=me
+          && d.category in ['help','kind','effort','idea','teamwork']
+          && d.message is string && d.message.size()>0 && d.message.size()<=100
+          && d.createdAt==request.time
+          && praiseId==(me+'~'+d.toStudentId+'~'+string(request.time.year())+'-'+string(request.time.month())+'-'+string(request.time.day()))
+          && get(/databases/$(database)/documents/schools/$(sid)/students/$(d.toStudentId)).data.status=='active';
+      }
+      match /praises/{praiseId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if praiseCreateOk(praiseId);
+        allow update: if false;
+        allow delete: if teacher(sid);
+      }
+      // ── 학급 공동 목표(D-107) ── 교사만 만들고 진행도를 갱신하며, 모두가 본다.
+      function goalShape() {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','title','metric','target','baseline','progress','rewardText','status','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','title','metric','target','baseline','progress','rewardText','status','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1
+          && d.title is string && d.title.size()>0 && d.title.size()<=60
+          && d.metric in ['taskSubmissions','praises','helpsCompleted','manual']
+          && d.target is int && d.target>=1 && d.target<=100000
+          && d.baseline is int && d.baseline>=0
+          && d.progress is int && d.progress>=0 && d.progress<=1000000
+          && d.rewardText is string && d.rewardText.size()<=100
+          && d.status in ['active','achieved','archived']
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      match /classGoals/{goalId} {
+        allow get: if active(sid);
+        allow list: if active(sid) && bounded();
+        allow create: if teacher(sid) && goalId.matches('^[A-Za-z0-9_-]{1,100}$') && goalShape() && request.resource.data.createdAt==request.time;
+        allow update: if teacher(sid) && goalShape() && request.resource.data.createdAt==resource.data.createdAt
+          && request.resource.data.metric==resource.data.metric && request.resource.data.baseline==resource.data.baseline;
+        allow delete: if false;
+      }
+      // ── 진로 자기이해 "나를 찾는 모험"(D-108) ── 본인과 교사만 읽는다. 할 때마다 회차가 1씩 늘고
+      // 같은 회차 번호의 이력 문서가 같은 트랜잭션에 반드시 함께 생긴다(이력은 수정·삭제 불가).
+      function careerProfilePath(studentId) { return /databases/$(database)/documents/schools/$(sid)/careerProfiles/$(studentId); }
+      function scoreOk(v) { return v is int && v>=0 && v<=100; }
+      function careerProfileShape(studentId) {
+        let d=request.resource.data;
+        let i=d.interest;
+        let st=d.strengths;
+        return d.keys().hasAll(['schoolId','studentId','band','interest','strengths','values','code','reflection','completions','schemaVersion','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','band','interest','strengths','values','code','reflection','completions','schemaVersion','createdAt','updatedAt'])
+          && d.schoolId==sid && d.schemaVersion==1 && d.studentId==studentId
+          && d.band in ['low','mid','high']
+          && i is map && i.keys().hasAll(['R','I','A','S','E','C']) && i.keys().hasOnly(['R','I','A','S','E','C'])
+          && scoreOk(i.R) && scoreOk(i.I) && scoreOk(i.A) && scoreOk(i.S) && scoreOk(i.E) && scoreOk(i.C)
+          && st is map && st.keys().hasAll(['word','logic','space','body','music','people','self','nature']) && st.keys().hasOnly(['word','logic','space','body','music','people','self','nature'])
+          && scoreOk(st.word) && scoreOk(st.logic) && scoreOk(st.space) && scoreOk(st.body)
+          && scoreOk(st.music) && scoreOk(st.people) && scoreOk(st.self) && scoreOk(st.nature)
+          && d.values is list && d.values.size()<=3 && d.values.hasOnly(['help','create','money','recognition','stability','freedom','together','achieve'])
+          && d.code is string && d.code.matches('^[RIASEC]{1,2}$')
+          && d.reflection is string && d.reflection.size()<=300
+          && d.completions is int && d.completions>=1
+          && d.updatedAt==request.time;
+      }
+      match /careerProfiles/{studentId} {
+        allow get: if teacher(sid) || ownStudent(sid,studentId);
+        allow list: if teacher(sid) && bounded();
+        allow create: if ownStudent(sid,studentId) && careerProfileShape(studentId)
+          && request.resource.data.completions==1 && request.resource.data.createdAt==request.time
+          && existsAfter(/databases/$(database)/documents/schools/$(sid)/careerProfiles/$(studentId)/history/1);
+        allow update: if ownStudent(sid,studentId) && careerProfileShape(studentId)
+          && request.resource.data.completions==resource.data.completions+1 && request.resource.data.createdAt==resource.data.createdAt
+          && existsAfter(/databases/$(database)/documents/schools/$(sid)/careerProfiles/$(studentId)/history/$(string(request.resource.data.completions)));
+        allow delete: if false;
+        match /history/{n} {
+          allow get: if teacher(sid) || ownStudent(sid,studentId);
+          allow list: if (teacher(sid) || ownStudent(sid,studentId)) && request.query.limit != null && request.query.limit <= 100;
+          allow create: if ownStudent(sid,studentId) && careerHistoryOk(studentId,n);
+          allow update, delete: if false;
+        }
+      }
+      function careerHistoryOk(studentId,n) {
+        let d=request.resource.data;
+        let p=getAfter(careerProfilePath(studentId)).data;
+        return d.keys().hasAll(['schoolId','band','interest','strengths','values','code','reflection','takenAt'])
+          && d.keys().hasOnly(['schoolId','band','interest','strengths','values','code','reflection','takenAt'])
+          && d.schoolId==sid && d.takenAt==request.time
+          && n==string(p.completions)
+          && d.band==p.band && d.interest==p.interest && d.strengths==p.strengths
+          && d.values==p.values && d.code==p.code && d.reflection==p.reflection;
       }
       // Each future feature receives explicit rules and emulator tests before activation.
       match /{document=**} { allow read, write: if false; }

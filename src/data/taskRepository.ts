@@ -2,8 +2,9 @@ import {collection,deleteDoc,doc,getDocFromServer,getDocsFromServer,limit,query,
 import type {Firestore} from 'firebase/firestore';
 import {isTeacher,schoolPath,type SchoolContext} from '../domain/model';
 import {assertApplicant,pairId} from '../domain/jobs';
-import {canRestart,canSubmit,validateSubmission,validateTemplate,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry} from '../domain/tasks';
+import {canRestart,canSubmit,taskRewardJournalId,validateSubmission,validateTemplate,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry} from '../domain/tasks';
 import {EVIDENCE_EXPIRY_HOURS,validateEvidence,type Evidence} from '../domain/evidence';
+import {ISSUER_ACCOUNT_ID} from '../domain/finance';
 export interface TaskStore {
   load():Promise<TaskData>;
   saveTemplate(t:TaskTemplate):Promise<void>;
@@ -99,6 +100,14 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
       await runTransaction(db,async tx=>{
         const target=ref('tasks',task.id),old=await tx.get(target);
         if(!old.exists()||old.data().status!=='submitted')throw new Error('이미 처리되었거나 제출되지 않은 업무입니다.');
+        // 완료 즉시 보상(D-104): 승인할 때 업무에 걸린 보상을 발행 계좌에서 바로 지급한다.
+        // 트랜잭션은 읽기를 쓰기보다 먼저 끝내야 하므로 템플릿·계좌를 여기서 모두 읽는다.
+        const template=approve?await tx.get(ref('taskTemplates',old.data().templateId)):null;
+        const reward=Number(template?.data()?.rewardMinor??0);
+        const studentId=old.data().assigneeStudentId as string,attempt=old.data().attempt as number;
+        const issuerRef=ref('accounts',ISSUER_ACCOUNT_ID),studentRef=ref('accounts',studentId);
+        const [issuer,student]=reward>0?await Promise.all([tx.get(issuerRef),tx.get(studentRef)]):[null,null];
+        if(reward>0&&!issuer!.exists())throw new Error('발행 계좌가 준비되지 않았습니다. 은행 화면에서 먼저 계좌를 준비해 주세요.');
         if(old.data().verificationKind==='photo'){
           tx.delete(ref('evidence',task.id));
           // 사진은 원본을 지우지만(개인정보 최소 보관, D-37) "언제 몇 번째 시도가 어떻게
@@ -107,6 +116,17 @@ export function firestoreTasks(db:Firestore,context:SchoolContext):TaskStore{
           tx.set(ref('auditLogs',crypto.randomUUID()),{schoolId:context.schoolId,actorUid:context.uid,action:'photo_review',targetType:'task',targetId:task.id,detail:`${task.assigneeStudentId} · 시도 ${old.data().attempt} · ${approve?'승인':'다시 제출 요청'}${note?': '+note:''}`.slice(0,500),createdAt:serverTimestamp()});
         }
         tx.update(target,{status:approve?'approved':'revision_requested',reviewNote:note,reviewerUid:context.uid,updatedAt:serverTimestamp()});
+        if(reward>0&&issuer&&student){
+          const journalId=taskRewardJournalId(task.id,attempt),label=`업무 완료 보상 · ${String(template!.data()!.title)}`.slice(0,60);
+          tx.set(ref('journals',journalId),{schoolId:context.schoolId,type:'TASK_REWARD',studentId,taskId:task.id,attempt,debitAccountId:ISSUER_ACCOUNT_ID,creditAccountId:studentId,amountMinor:reward,postedBy:context.uid,schemaVersion:1,createdAt:serverTimestamp()});
+          const issuerAfter=issuer.data()!.balanceMinor-reward;
+          tx.update(issuerRef,{balanceMinor:issuerAfter,version:issuer.data()!.version+1,lastJournalId:journalId,updatedAt:serverTimestamp()});
+          tx.set(doc(collection(issuerRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'TASK_REWARD',deltaMinor:-reward,balanceAfterMinor:issuerAfter,label:'업무 완료 보상 지급',postedAt:serverTimestamp()});
+          const studentAfter=(student.exists()?student.data()!.balanceMinor:0)+reward;
+          if(student.exists())tx.update(studentRef,{balanceMinor:studentAfter,version:student.data()!.version+1,lastJournalId:journalId,updatedAt:serverTimestamp()});
+          else tx.set(studentRef,{schoolId:context.schoolId,ownerType:'student',ownerId:studentId,balanceMinor:studentAfter,version:0,lastJournalId:journalId,status:'active',schemaVersion:1,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+          tx.set(doc(collection(studentRef,'entries'),journalId),{schoolId:context.schoolId,journalId,type:'TASK_REWARD',deltaMinor:reward,balanceAfterMinor:studentAfter,label,postedAt:serverTimestamp()});
+        }
       });
     },
     async restart(task){

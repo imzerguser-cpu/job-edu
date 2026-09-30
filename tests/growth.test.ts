@@ -26,12 +26,15 @@ describe('시민 성장', () => {
     expect(earned).toEqual(['first-job','first-purchase']);
   });
   it('모험은 급한 일부터 최대 3개만 제안한다', () => {
-    const q=quests({...emptyGrowthStats,tasksOpen:2,tasksRevision:1,openTaskBuilding:'store'});
+    const q=quests({...emptyGrowthStats,selfDiscoveries:1,tasksOpen:2,tasksRevision:1,openTaskBuilding:'store'});
     expect(q).toHaveLength(3);
     expect(q[0]).toMatchObject({id:'revise',target:'store'});
-    expect(quests(emptyGrowthStats).map(x=>x.id)).toEqual(['apply','shop','save']);
+    expect(quests(emptyGrowthStats).map(x=>x.id)).toEqual(['discover','apply','shop']);
+  });
+  it('나를 찾는 모험은 경험치를 3번까지만 준다', () => {
+    expect(totalXp({...emptyGrowthStats,selfDiscoveries:10})).toBe(180);
   });
   it('모든 것을 해낸 시민에게는 남은 모험이 없다', () => {
-    expect(quests({...emptyGrowthStats,activeJobs:2,applications:2,purchases:1,savingsJoined:1,proposalsSubmitted:1})).toEqual([]);
+    expect(quests({...emptyGrowthStats,activeJobs:2,applications:2,purchases:1,savingsJoined:1,proposalsSubmitted:1,selfDiscoveries:1,helpsGiven:1})).toEqual([]);
   });
 });

@@ -52,6 +52,11 @@ export function GuideWorkspace({store,school,communityLabel,onClose}:{store:Care
     </section>
 
     <section className="panel section">
+      <h2>함께 자라요</h2>
+      <p>🧭 <b>나를 찾기</b>에서 내가 좋아하는 것과 잘하는 것을 알아보고 어울리는 직업을 찾아요. 🤝 <b>도움 게시판</b>에서 친구를 도우면 보상을 받아요. 🌟 <b>칭찬 나무</b>에서 친구를 칭찬해요. 일을 하면 레벨이 올라가요!</p>
+    </section>
+
+    <section className="panel section">
       <h2>더 크면 해볼 수 있는 것 (선택)</h2>
       <p>새 직업이나 놀이를 만들자고 제안하고, 친구들과 투표할 수도 있어요. 약속을 안 지키면 벌점을 받을 수도 있어요.</p>
     </section>

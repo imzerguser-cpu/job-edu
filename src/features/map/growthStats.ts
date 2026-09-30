@@ -5,19 +5,22 @@ import type {FinanceStore} from '../../data/financeRepository';
 import type {SavingsStore} from '../../data/savingsRepository';
 import type {LoanStore} from '../../data/loanRepository';
 import type {ProposalStore} from '../../data/proposalRepository';
+import type {CommunityStore} from '../../data/communityRepository';
+import type {CareerProfileStore} from '../../data/careerProfileRepository';
 import {buildings,type BuildingId} from './buildings';
 
-export interface GrowthSources {careerStore:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;proposalStore:ProposalStore}
+export interface GrowthSources {careerStore:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;proposalStore:ProposalStore;communityStore:CommunityStore;careerProfileStore:CareerProfileStore}
 
 export function buildingForIcon(icon:string):BuildingId|null{return buildings.find(b=>b.icons?.includes(icon))?.id??null}
 
 // 각 기록을 따로 불러오고, 하나가 실패해도(권한·네트워크) 그 항목만 0으로 두고 나머지는 보여 준다 —
 // 성장 화면 하나 때문에 지도 전체가 멈추면 안 되기 때문.
 export async function loadGrowthStats(src:GrowthSources,studentId:string):Promise<GrowthStats>{
-  const [careers,tasks,salaries,purchases,savings,loans,proposals]=await Promise.allSettled([
+  const [careers,tasks,salaries,purchases,savings,loans,proposals,praises,helps,profile]=await Promise.allSettled([
     src.careerStore.load(),src.taskStore.load(),
     src.financeStore.myEntryCount('SALARY'),src.financeStore.myEntryCount('PURCHASE'),
     src.savingsStore.myContracts(),src.loanStore.myLoans(),src.proposalStore.loadProposals(),
+    src.communityStore.praisesReceived(studentId),src.communityStore.listHelp(),src.careerProfileStore.myProfile(),
   ]);
   const s:GrowthStats={...emptyGrowthStats};
   if(careers.status==='fulfilled'){
@@ -49,5 +52,8 @@ export async function loadGrowthStats(src:GrowthSources,studentId:string):Promis
     s.proposalsSubmitted=mine.length;
     s.proposalsApproved=mine.filter(p=>p.status==='approved').length;
   }
+  if(praises.status==='fulfilled')s.praisesReceived=praises.value;
+  if(helps.status==='fulfilled')s.helpsGiven=helps.value.filter(h=>h.helperStudentId===studentId&&h.status==='paid').length;
+  if(profile.status==='fulfilled'&&profile.value){s.selfDiscoveries=profile.value.completions;s.discoveryCode=profile.value.code}
   return s;
 }
