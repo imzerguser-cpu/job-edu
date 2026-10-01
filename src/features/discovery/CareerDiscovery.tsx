@@ -61,6 +61,12 @@ export function CareerDiscovery({store,careerStore,citizen,onGo}:{store:CareerPr
     {profile&&<div className="section"><DiscoveryResult d={profile} jobs={jobs} previous={history[1]??null} onGo={onGo}/></div>}
   </section>;
 
+  if((step==='interest'||step==='strength')&&band==='low'){
+    const items=step==='interest'?interestItems(band):strengthItems(band);
+    return <PictureQuiz key={step} items={items} answers={answers} faces={step==='interest'?lowInterestFaces:lowStrengthFaces}
+      title={step==='interest'?'좋아요? 싫어요?':'나는 잘해요?'} onAnswer={(id,v)=>setAnswers(a=>({...a,[id]:v}))}
+      onBack={()=>setStep(step==='interest'?'intro':'interest')} onDone={()=>setStep(step==='interest'?'strength':'result')}/>;
+  }
   if(step==='interest'||step==='strength'){
     const items=step==='interest'?interestItems(band):strengthItems(band);
     const scale=step==='interest'?bandInfo[band].scale:strengthScale;
@@ -101,6 +107,30 @@ export function CareerDiscovery({store,careerStore,citizen,onGo}:{store:CareerPr
           :<><button type="button" className="button primary" disabled={busy} onClick={save}>{busy?'저장 중…':'모험 기록 저장하기'}</button><button type="button" className="button quiet" onClick={()=>setStep('interest')}>답 다시 고르기</button></>}
       </div>
     </section>
+  </section>;
+}
+
+// 1~2학년 그림 문항(D-115): 글 대신 큰 그림과 표정으로 고른다. 글자는 그림 아래 작게만.
+const lowInterestFaces=[{v:2,face:'😀',label:'좋아요'},{v:1,face:'🙂',label:'그냥 그래요'},{v:0,face:'😐',label:'별로예요'}];
+const lowStrengthFaces=[{v:2,face:'⭐',label:'잘해요'},{v:1,face:'👍',label:'조금 잘해요'},{v:0,face:'🌱',label:'배우는 중'}];
+function PictureQuiz({items,answers,faces,title,onAnswer,onBack,onDone}:{items:{id:string;pic:string;text:string}[];answers:Answers;faces:{v:number;face:string;label:string}[];title:string;onAnswer:(id:string,v:number)=>void;onBack:()=>void;onDone:()=>void}){
+  const [index,setIndex]=useState(()=>{const first=items.findIndex(i=>answers[i.id]===undefined);return first<0?0:first});
+  const item=items[index];
+  function pick(v:number){
+    onAnswer(item.id,v);
+    window.setTimeout(()=>{if(index+1<items.length)setIndex(index+1);else onDone()},250);
+  }
+  return <section className="discovery picture-quiz">
+    <div className="picture-progress" aria-label={`${items.length}개 중 ${index+1}번째`}>{items.map((it,i)=><span key={it.id} className={i===index?'now':answers[it.id]!==undefined?'done':''}/>)}</div>
+    <h2 className="picture-title">{title}</h2>
+    <div className="picture-card" key={item.id}>
+      <span className="picture-scene" role="img" aria-label={item.text}>{item.pic}</span>
+      <p className="picture-caption">{item.text}</p>
+    </div>
+    <div className="picture-faces" role="radiogroup" aria-label={item.text}>
+      {faces.map(f=><button key={f.v} type="button" role="radio" aria-checked={answers[item.id]===f.v} aria-label={f.label} onClick={()=>pick(f.v)}><span aria-hidden="true">{f.face}</span><small>{f.label}</small></button>)}
+    </div>
+    <div className="header-actions"><button type="button" className="button quiet" onClick={()=>index>0?setIndex(index-1):onBack()}>← 이전</button></div>
   </section>;
 }
 

@@ -54,45 +54,46 @@ export const bandInfo:Record<GradeBand,{name:string;grades:string;valuePicks:num
 export const strengthScale=['🌱 배우는 중이에요','👍 조금 잘해요','⭐ 잘해요'];
 export function bandForGrade(grade:number):GradeBand{return grade<=2?'low':grade<=4?'mid':'high'}
 
-export interface InterestItem {id:string;type:HollandType;icon:string;text:string}
-export interface StrengthItem {id:string;area:StrengthArea;icon:string;text:string}
+// pic: 1~2학년용 그림(큰 이모지 장면). 글을 읽기 어려운 학생도 그림만 보고 고를 수 있게(사용자 요청, D-115).
+export interface InterestItem {id:string;type:HollandType;icon:string;text:string;pic:string}
+export interface StrengthItem {id:string;area:StrengthArea;icon:string;text:string;pic:string}
 
 // 흥미 문항: 저학년 12(유형당 2) / 중학년 18(유형당 3) / 고학년 24(유형당 4).
 // 앞쪽 문항일수록 쉬운 활동이고, 학년대가 올라갈수록 뒤 문항이 추가된다.
-const interestPool:Record<HollandType,{icon:string;low:string;mid:string;high:string}[]>={
+const interestPool:Record<HollandType,{icon:string;low:string;mid:string;high:string;pic?:string}[]>={
   R:[
-    {icon:'🧱',low:'블록이나 레고로 무언가 만들기',mid:'블록·종이·나무로 무언가 만들기',high:'도구를 써서 물건을 직접 만들기'},
-    {icon:'🌱',low:'밖에서 식물이나 동물 돌보기',mid:'식물을 기르거나 동물 돌보기',high:'식물을 기르고 동물을 보살피기'},
+    {icon:'🧱',pic:'🧱🏰',low:'블록이나 레고로 무언가 만들기',mid:'블록·종이·나무로 무언가 만들기',high:'도구를 써서 물건을 직접 만들기'},
+    {icon:'🌱',pic:'🌱🐶',low:'밖에서 식물이나 동물 돌보기',mid:'식물을 기르거나 동물 돌보기',high:'식물을 기르고 동물을 보살피기'},
     {icon:'🔧',low:'',mid:'고장 난 물건을 고쳐 보기',high:'기계가 움직이는 원리를 알아보고 고치기'},
     {icon:'⚽',low:'',mid:'',high:'몸을 움직여 하는 일(운동·정리·옮기기)'},
   ],
   I:[
-    {icon:'❓',low:'왜 그런지 궁금한 것 알아보기',mid:'궁금한 것을 책이나 인터넷에서 찾아보기',high:'궁금한 것을 여러 자료로 조사해 비교하기'},
-    {icon:'🧪',low:'실험하거나 자세히 관찰하기',mid:'과학 실험하고 관찰하기',high:'실험하고 관찰한 결과를 정리하기'},
+    {icon:'❓',pic:'🤔🔍',low:'왜 그런지 궁금한 것 알아보기',mid:'궁금한 것을 책이나 인터넷에서 찾아보기',high:'궁금한 것을 여러 자료로 조사해 비교하기'},
+    {icon:'🧪',pic:'🧪🔬',low:'실험하거나 자세히 관찰하기',mid:'과학 실험하고 관찰하기',high:'실험하고 관찰한 결과를 정리하기'},
     {icon:'🧮',low:'',mid:'수학 문제나 퍼즐 풀기',high:'어려운 문제를 끝까지 생각해서 풀기'},
     {icon:'🪐',low:'',mid:'',high:'자연이나 우주 현상의 원인 알아보기'},
   ],
   A:[
-    {icon:'🖍️',low:'그림 그리기와 색칠하기',mid:'그림이나 만화 그리기',high:'그림을 그리거나 무언가를 예쁘게 꾸미기'},
-    {icon:'🎤',low:'노래 부르거나 춤추기',mid:'노래·악기 연주·춤',high:'음악·춤·연극으로 표현하기'},
+    {icon:'🖍️',pic:'🖍️🎨',low:'그림 그리기와 색칠하기',mid:'그림이나 만화 그리기',high:'그림을 그리거나 무언가를 예쁘게 꾸미기'},
+    {icon:'🎤',pic:'🎤💃',low:'노래 부르거나 춤추기',mid:'노래·악기 연주·춤',high:'음악·춤·연극으로 표현하기'},
     {icon:'✏️',low:'',mid:'이야기나 동시 짓기',high:'나만의 이야기나 글 짓기'},
     {icon:'💭',low:'',mid:'',high:'남들이 생각 못한 새 아이디어 떠올리기'},
   ],
   S:[
-    {icon:'🤝',low:'어려워하는 친구 도와주기',mid:'모르는 친구에게 친절하게 알려 주기',high:'친구에게 공부나 방법을 가르쳐 주기'},
-    {icon:'👂',low:'친구 이야기 들어 주기',mid:'친구의 고민 이야기 들어 주기',high:'친구의 고민을 듣고 위로해 주기'},
+    {icon:'🤝',pic:'🧒🤝🧒',low:'어려워하는 친구 도와주기',mid:'모르는 친구에게 친절하게 알려 주기',high:'친구에게 공부나 방법을 가르쳐 주기'},
+    {icon:'👂',pic:'👂💬',low:'친구 이야기 들어 주기',mid:'친구의 고민 이야기 들어 주기',high:'친구의 고민을 듣고 위로해 주기'},
     {icon:'👫',low:'',mid:'모둠 친구들과 사이좋게 협동하기',high:'다른 사람을 위한 봉사 활동하기'},
     {icon:'🕊️',low:'',mid:'',high:'다툰 친구들이 화해하도록 돕기'},
   ],
   E:[
-    {icon:'🙋',low:'친구들 앞에서 발표하기',mid:'모둠장이 되어 친구들 이끌기',high:'모둠이나 학급 행사를 앞장서 이끌기'},
-    {icon:'👑',low:'놀이에서 규칙 정하고 이끌기',mid:'가게 놀이처럼 물건 팔아 보기',high:'물건을 팔아 이익을 내는 계획 세우기'},
+    {icon:'🙋',pic:'🙋📢',low:'친구들 앞에서 발표하기',mid:'모둠장이 되어 친구들 이끌기',high:'모둠이나 학급 행사를 앞장서 이끌기'},
+    {icon:'👑',pic:'👑🎲',low:'놀이에서 규칙 정하고 이끌기',mid:'가게 놀이처럼 물건 팔아 보기',high:'물건을 팔아 이익을 내는 계획 세우기'},
     {icon:'🗣️',low:'',mid:'내 생각을 친구들에게 설득하기',high:'토론에서 내 의견을 설득력 있게 말하기'},
     {icon:'🚀',low:'',mid:'',high:'새로운 일을 계획하고 도전하기'},
   ],
   C:[
-    {icon:'🧺',low:'물건을 가지런히 정리하기',mid:'책상이나 사물함 깔끔하게 정리하기',high:'자료를 표나 목록으로 깔끔하게 정리하기'},
-    {icon:'✅',low:'약속과 규칙 잘 지키기',mid:'정해진 순서대로 차근차근 하기',high:'계획표를 세우고 그대로 지키기'},
+    {icon:'🧺',pic:'🧺📚',low:'물건을 가지런히 정리하기',mid:'책상이나 사물함 깔끔하게 정리하기',high:'자료를 표나 목록으로 깔끔하게 정리하기'},
+    {icon:'✅',pic:'🤙✅',low:'약속과 규칙 잘 지키기',mid:'정해진 순서대로 차근차근 하기',high:'계획표를 세우고 그대로 지키기'},
     {icon:'📒',low:'',mid:'용돈이나 물건을 공책에 기록하기',high:'돈이나 물건을 장부에 기록하기'},
     {icon:'🔎',low:'',mid:'',high:'실수가 없는지 꼼꼼히 다시 확인하기'},
   ],
@@ -101,24 +102,24 @@ const perBand:Record<GradeBand,number>={low:2,mid:3,high:4};
 export function interestItems(band:GradeBand):InterestItem[]{
   // 유형이 한 줄로 몰리지 않도록 R I A S E C 순서로 번갈아 섞는다.
   const n=perBand[band],items:InterestItem[]=[];
-  for(let i=0;i<n;i++)for(const type of hollandTypes){const p=interestPool[type][i];items.push({id:`${type}${i}`,type,icon:p.icon,text:p[band]})}
+  for(let i=0;i<n;i++)for(const type of hollandTypes){const p=interestPool[type][i];items.push({id:`${type}${i}`,type,icon:p.icon,text:p[band],pic:p.pic??p.icon})}
   return items;
 }
 
 // 강점 문항: 저학년 8(영역당 1) / 중·고학년 16(영역당 2).
-const strengthPool:Record<StrengthArea,{icon:string;a:string;b:string}>={
-  word:{icon:'📚',a:'이야기를 재미있게 말하거나 글로 잘 써요',b:'책을 읽고 내용을 잘 설명해요'},
-  logic:{icon:'🔢',a:'숫자와 계산을 잘해요',b:'규칙이나 이유를 잘 찾아내요'},
-  space:{icon:'🧩',a:'그림 그리기나 만들기를 잘해요',b:'지도나 모양을 머릿속으로 잘 떠올려요'},
-  body:{icon:'🏃',a:'몸을 움직이는 운동을 잘해요',b:'손으로 섬세하게 만들거나 다뤄요'},
-  music:{icon:'🎶',a:'노래나 리듬을 잘 따라 해요',b:'소리나 박자의 차이를 잘 알아차려요'},
-  people:{icon:'🫂',a:'친구들과 잘 어울려요',b:'친구의 마음을 잘 알아차려요'},
-  self:{icon:'🪞',a:'내 기분이 어떤지 잘 알아요',b:'스스로 목표를 세우고 해내요'},
-  nature:{icon:'🌿',a:'동물이나 식물을 잘 알아봐요',b:'날씨나 계절의 변화를 잘 관찰해요'},
+const strengthPool:Record<StrengthArea,{icon:string;pic:string;a:string;b:string}>={
+  word:{icon:'📚',pic:'📖🗣️',a:'이야기를 재미있게 말하거나 글로 잘 써요',b:'책을 읽고 내용을 잘 설명해요'},
+  logic:{icon:'🔢',pic:'🔢➕',a:'숫자와 계산을 잘해요',b:'규칙이나 이유를 잘 찾아내요'},
+  space:{icon:'🧩',pic:'🎨🧩',a:'그림 그리기나 만들기를 잘해요',b:'지도나 모양을 머릿속으로 잘 떠올려요'},
+  body:{icon:'🏃',pic:'🏃⚽',a:'몸을 움직이는 운동을 잘해요',b:'손으로 섬세하게 만들거나 다뤄요'},
+  music:{icon:'🎶',pic:'🎶🥁',a:'노래나 리듬을 잘 따라 해요',b:'소리나 박자의 차이를 잘 알아차려요'},
+  people:{icon:'🫂',pic:'👫😄',a:'친구들과 잘 어울려요',b:'친구의 마음을 잘 알아차려요'},
+  self:{icon:'🪞',pic:'🪞💭',a:'내 기분이 어떤지 잘 알아요',b:'스스로 목표를 세우고 해내요'},
+  nature:{icon:'🌿',pic:'🐞🌳',a:'동물이나 식물을 잘 알아봐요',b:'날씨나 계절의 변화를 잘 관찰해요'},
 };
 export function strengthItems(band:GradeBand):StrengthItem[]{
-  const items:StrengthItem[]=strengthAreas.map(area=>({id:`${area}0`,area,icon:strengthPool[area].icon,text:strengthPool[area].a}));
-  if(band!=='low')items.push(...strengthAreas.map(area=>({id:`${area}1`,area,icon:strengthPool[area].icon,text:strengthPool[area].b})));
+  const items:StrengthItem[]=strengthAreas.map(area=>({id:`${area}0`,area,icon:strengthPool[area].icon,pic:strengthPool[area].pic,text:strengthPool[area].a}));
+  if(band!=='low')items.push(...strengthAreas.map(area=>({id:`${area}1`,area,icon:strengthPool[area].icon,pic:strengthPool[area].pic,text:strengthPool[area].b})));
   return items;
 }
 
