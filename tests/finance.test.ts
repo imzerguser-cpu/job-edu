@@ -5,7 +5,7 @@ describe('화폐 최소 단위 변환',()=>{
   it('원 단위를 최소 단위(100분의 1)로 변환한다',()=>{expect(toMinor(500)).toBe(50000);expect(toMinor(0)).toBe(0)});
   it('최소 단위를 다시 원 단위로 변환한다',()=>{expect(toMajor(50000)).toBe(500);expect(toMajor(150)).toBe(1.5)});
   it('음수·비정상 값을 거부한다',()=>{expect(()=>toMinor(-1)).toThrow();expect(()=>toMinor(Infinity)).toThrow()});
-  it('표시 형식은 천 단위 구분과 화폐 이름을 붙인다',()=>{expect(formatMoney(150000,'마동')).toBe('1,500마동')});
+  it('표시 형식은 천 단위 구분과 금액 단위를 붙인다(마동 → 동)',()=>{expect(formatMoney(150000,'마동')).toBe('1,500동');expect(formatMoney(150000,'원')).toBe('1,500원');expect(formatMoney(150000,'포인트')).toBe('1,500포인트')});
 });
 describe('월급 정산 식별자',()=>{
   it('직업·학생·월이 같으면 같은 지급 식별자를 만든다(중복 지급 방지)',()=>{

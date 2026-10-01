@@ -135,7 +135,7 @@ function ProposalForm({type,initial,busy,onCancel,onSubmit,onSaveDraft}:{type:Pr
       <label>어떤 일을 하나요<textarea name="purpose" required maxLength={1000} rows={2} defaultValue={jobInitial?.purpose}/></label>
       <label>구체적인 업무<textarea name="tasks" required maxLength={1000} rows={2} defaultValue={jobInitial?.tasks}/></label>
       <label>누구에게 도움이 되나요<input name="beneficiary" maxLength={500} defaultValue={jobInitial?.beneficiary}/></label>
-      <label>예상 급여(마동/월)<input name="salary" type="number" min={0} max={10000} step={1} defaultValue={jobInitial?toMajor(jobInitial.suggestedSalaryMinor):undefined}/></label>
+      <label>예상 급여(동/월)<input name="salary" type="number" min={0} max={10000} step={1} defaultValue={jobInitial?toMajor(jobInitial.suggestedSalaryMinor):undefined}/></label>
       <label>필요한 도구<input name="tools" maxLength={500} defaultValue={jobInitial?.tools}/></label>
       <label>추천 이유<textarea name="reason" required maxLength={1000} rows={2} defaultValue={jobInitial?.reason}/></label>
     </>:type==='business'?<>

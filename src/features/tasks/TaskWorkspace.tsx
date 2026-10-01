@@ -7,7 +7,7 @@ import type {TaskStore} from '../../data/taskRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import {compressImageToBase64} from '../../ui/imageCompress';
 import {taskPresets} from '../../domain/taskPresets';
-import {formatMoney,toMajor,toMinor} from '../../domain/money';
+import {amountUnit,formatMoney,toMajor,toMinor} from '../../domain/money';
 
 export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter,currencySymbol='마동'}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string;iconFilter?:string[];currencySymbol?:string}){
   const [data,setData]=useState<TaskData>({templates:[],tasks:[]});
@@ -99,7 +99,7 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
         <label>안내 내용<textarea name="instructions" defaultValue={editing.instructions} required maxLength={1000} rows={3}/></label>
         <label>인증 방식<select name="kind" defaultValue={editing.verificationKind}><option value="artifact">{verificationKindNames.artifact}</option><option value="photo">{verificationKindNames.photo}</option></select></label>
         <label>운영 상태<select name="status" defaultValue={editing.status}><option value="active">운영 중</option><option value="archived">보관</option></select></label>
-        <label>완료 보상({currencySymbol}, 승인하는 순간 학생 계좌로 바로 지급 · 0이면 없음)<input name="reward" type="number" min={0} max={1000} step={1} defaultValue={toMajor(editing.rewardMinor??0)}/></label>
+        <label>완료 보상({amountUnit(currencySymbol)}, 승인하는 순간 학생 계좌로 바로 지급 · 0이면 없음)<input name="reward" type="number" min={0} max={1000} step={1} defaultValue={toMajor(editing.rewardMinor??0)}/></label>
         <p className="muted">자동 인증(도서 대여 등 실제 이벤트 연동)은 다음 단계에서 추가됩니다.</p>
         <div className="header-actions"><button className="button primary" disabled={busy}>저장</button><button type="button" className="button quiet" onClick={()=>setEditing(null)}>취소</button></div>
       </form>}

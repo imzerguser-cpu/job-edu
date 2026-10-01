@@ -2,7 +2,10 @@
 export const CURRENCY_MINOR_SCALE=100;
 export function toMinor(major:number){if(!Number.isFinite(major)||major<0)throw new Error('금액을 확인해 주세요.');return Math.round(major*CURRENCY_MINOR_SCALE)}
 export function toMajor(minor:number){return minor/CURRENCY_MINOR_SCALE}
-export function formatMoney(minor:number,symbol='마동'){return `${toMajor(minor).toLocaleString()}${symbol}`}
+// 금액 뒤에 붙는 단위(D-117): 화폐 이름이 "마동"처럼 '동'으로 끝나면 금액에는 "동"만 붙인다
+// (300마동 → 300동, 사용자 요청). 화폐 이름 자체(마동)는 안내 문구 등에서 그대로 쓴다.
+export function amountUnit(currencyName:string){const name=currencyName.trim();return name.length>1&&name.endsWith('동')?'동':name}
+export function formatMoney(minor:number,currencyName='마동'){return `${toMajor(minor).toLocaleString()}${amountUnit(currencyName)}`}
 export function currentPeriod(){const now=new Date();return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`}
 export function assertMoney(n:number){if(!Number.isSafeInteger(n)||n<0||n>1_000_000_000)throw new Error('금액 범위를 확인해 주세요.');return n}
 export function simpleInterest(principalMinor:number,monthlyRateBps:number,months:number):number{

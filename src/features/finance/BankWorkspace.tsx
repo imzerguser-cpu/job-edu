@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {formatMoney,currentPeriod} from '../../domain/money';
+import {amountUnit,formatMoney,currentPeriod} from '../../domain/money';
 import {validAmount,validMonths,type Account,type AccountEntry,type FinancialProduct,type IncomeTaxPreviewItem,type SalaryPreviewItem} from '../../domain/finance';
 import type {SavingsContract,SavingsMaturityPreviewItem} from '../../domain/savings';
 import type {FinanceReviewChecklist,FinancialRequest,LoanContract} from '../../domain/loans';
@@ -306,7 +306,7 @@ function TeacherCommunityFund({store,currencySymbol}:{store:FinanceStore;currenc
     <p className="muted">현재 잔액 {formatMoney(balance??0,currencySymbol)} (소득세·사업 세금·과태료가 모입니다)</p>
     <div className="assignment-form">
       <label>지출 내용<input maxLength={200} value={description} onChange={e=>setDescription(e.target.value)}/></label>
-      <label>금액({currencySymbol})<input type="number" min={1} max={10000} step={1} value={amount||''} onChange={e=>setAmount(Number(e.target.value))}/></label>
+      <label>금액({amountUnit(currencySymbol)})<input type="number" min={1} max={10000} step={1} value={amount||''} onChange={e=>setAmount(Number(e.target.value))}/></label>
       <button className="button primary" disabled={busy||!description.trim()||!amount} onClick={spend}>지출하기</button>
     </div>
     <h4>최근 내역</h4>

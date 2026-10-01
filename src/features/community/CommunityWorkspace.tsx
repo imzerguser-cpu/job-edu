@@ -1,6 +1,6 @@
 import {useEffect,useState,type FormEvent} from 'react';
 import {goalMetrics,goalProgress,helpStatusNames,praiseCategories,type ClassGoal,type GoalMetric,type HelpRequest,type Praise,type PraiseCategory} from '../../domain/community';
-import {formatMoney,toMinor} from '../../domain/money';
+import {amountUnit,formatMoney,toMinor} from '../../domain/money';
 import type {Student} from '../../domain/model';
 import type {CommunityStore} from '../../data/communityRepository';
 
@@ -36,7 +36,7 @@ export function HelpBoard({store,students,studentId,currencySymbol}:{store:Commu
     {writing&&<form className="panel action-form" onSubmit={post}>
       <label>무엇을 도와주면 좋을까요?<input name="title" required maxLength={60} placeholder="예: 게시판 꾸미기 같이 해 줄 친구!" autoFocus/></label>
       <label>자세한 설명(선택)<textarea name="description" maxLength={500} rows={2}/></label>
-      <label>고마움의 보상({currencySymbol}, 0이면 보상 없이 부탁)<input name="reward" type="number" min={0} max={1000} step={1} defaultValue={0}/></label>
+      <label>고마움의 보상({amountUnit(currencySymbol)}, 0이면 보상 없이 부탁)<input name="reward" type="number" min={0} max={1000} step={1} defaultValue={0}/></label>
       <div className="header-actions"><button className="button primary" disabled={busy}>올리기</button></div>
     </form>}
     {!teacher&&<nav className="workspace-tabs" aria-label="도움 게시판 보기">{([['open','도와줄 수 있는 부탁'],['mine','나와 관련된 부탁'],['all','전체']] as const).map(([id,label])=><button key={id} type="button" aria-pressed={filter===id} onClick={()=>setFilter(id)}>{label}</button>)}</nav>}

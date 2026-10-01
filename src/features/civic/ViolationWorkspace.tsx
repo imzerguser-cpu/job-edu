@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {formatMoney} from '../../domain/money';
+import {amountUnit,formatMoney} from '../../domain/money';
 import {violationStatusNames,type ViolationReport} from '../../domain/violations';
 import {compareByGradeNumber,studentLabel,type Student} from '../../domain/model';
 import type {ViolationStore} from '../../data/violationRepository';
@@ -76,7 +76,7 @@ function TeacherViolations({store,students,currencySymbol}:{store:ViolationStore
       <p className="muted">{r.description}</p>
       <label>의견/사유<textarea maxLength={500} value={note[r.id]??''} onChange={e=>setNote({...note,[r.id]:e.target.value})}/></label>
       <div className="assignment-form">
-        <label>과태료 금액({currencySymbol})<input type="number" min={1} max={1000} step={1} value={fineAmount[r.id]??''} onChange={e=>setFineAmount({...fineAmount,[r.id]:Number(e.target.value)})}/></label>
+        <label>과태료 금액({amountUnit(currencySymbol)})<input type="number" min={1} max={1000} step={1} value={fineAmount[r.id]??''} onChange={e=>setFineAmount({...fineAmount,[r.id]:Number(e.target.value)})}/></label>
         <div className="header-actions">
           <button className="button primary" disabled={busy||!fineAmount[r.id]} onClick={()=>fine(r.id)}>과태료 부과</button>
           <button className="button quiet" disabled={busy||!(note[r.id]??'').trim()} onClick={()=>dismiss(r.id)}>기각</button>
