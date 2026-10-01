@@ -93,7 +93,7 @@ function Login({onError}:{onError:(s:string)=>void}){
           <label>이름<input name="name" autoComplete="username" required maxLength={40}/></label></>
         :<><h2>선생님 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p>
           <label>계정 이메일<input type="email" name="email" autoComplete="username" required/></label></>}
-      <label>{mode==="teacher"?"비밀번호":"비밀번호(숫자 4자리)"}<input type="password" name="password" autoComplete="current-password" required inputMode={mode==="teacher"?undefined:"numeric"}/></label>
+      <label>비밀번호<input type="password" name="password" autoComplete="current-password" required inputMode={mode==="teacher"?undefined:"numeric"}/></label>
       <button className="button primary full" disabled={busy}>{busy?'확인 중…':'로그인'}</button>
       <p className="muted">공용 태블릿에서는 이용 후 로그아웃해 주세요.</p>
     </form>
@@ -198,7 +198,7 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
   return <><div className="page-heading"><div><span className="eyebrow">{school.schoolName}</span><h1>시민 관리</h1><p>우리 학교 시민의 등록 상태를 확인합니다.</p></div><span className="tag">교사 운영실</span></div>{error?<p role="alert" className="error">{error}</p>:loading?<p role="status">시민 정보를 확인하고 있어요.</p>:<>{editResult&&<p role="status" className="success">{editResult}</p>}<details className="panel roster-accordion"><summary><h2>학생 명단 <span className="count">{students.length}</span></h2><span className="muted roster-accordion-hint">눌러서 펼치기·접기</span></summary><div className="header-actions section"><button className="button quiet" onClick={()=>setRefresh(n=>n+1)}>새로고침</button><button className="button primary" onClick={()=>setImporting(!importing)}>명단 가져오기</button></div>{students.length?<div className="table-scroll"><table><thead><tr><th>이름</th><th>학년</th><th>반</th><th>학년도</th><th>상태</th><th></th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td>{s.name}</td><td>{s.grade}학년</td><td>{s.className??'미지정'}</td><td>{s.schoolYear}</td><td>{s.status==='active'?'활동 중':s.status==='graduated'?'졸업':'전출'}</td><td><button className="button quiet" onClick={()=>setEditingStudent(s)}>수정</button> <button className="button quiet" onClick={()=>{setResettingStudent(s);setResetResult(null)}}>비밀번호 재설정</button></td></tr>)}</tbody></table>{hasMoreStudents&&<button className="button quiet section" disabled={loadingMore} onClick={loadMoreStudents}>{loadingMore?'불러오는 중…':'학생 더 보기'}</button>}</div>:<div className="empty">등록된 학생이 없습니다. 명단을 확인한 뒤 가져와 주세요.</div>}</details>
     {editingStudent&&<form className="panel section action-form" onSubmit={saveStudent}>
       <h3>{editingStudent.name} 정보 수정</h3>
-      <div className="fields"><label>이름<input name="name" defaultValue={editingStudent.name} required maxLength={40}/></label><label>새 비밀번호(숫자 4자리, 바꿀 때만)<input name="newPassword" inputMode="numeric" pattern="[0-9]{4}|.{6,}" maxLength={40} placeholder="비워두면 그대로"/></label></div>
+      <div className="fields"><label>이름<input name="name" defaultValue={editingStudent.name} required maxLength={40}/></label><label>새 비밀번호(숫자 4자리 또는 6자 이상, 바꿀 때만)<input name="newPassword" inputMode="numeric" pattern="[0-9]{4}|.{6,}" maxLength={40} placeholder="비워두면 그대로"/></label></div>
       <div className="fields"><label>학년<select name="grade" defaultValue={editingStudent.grade}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label><label>반<input name="className" defaultValue={editingStudent.className??''} maxLength={20}/></label></div>
       <label>학적 상태<select name="status" defaultValue={editingStudent.status}><option value="active">활동 중</option><option value="graduated">졸업</option><option value="transferred">전출</option></select></label>
       <p className="muted">학년이나 이름을 바꾸면 학생의 로그인 아이디(학년·이름)도 함께 바뀝니다. 졸업·전출으로 바꿔도 기록은 보존됩니다.</p>
@@ -206,19 +206,19 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
     </form>}
     {resettingStudent&&<form className="panel section action-form" onSubmit={resetPassword}>
       <h3>{resettingStudent.name}({resettingStudent.grade}학년) 비밀번호 재설정</h3>
-      <label>새 비밀번호(숫자 4자리, 비우면 자동 생성)<input name="password" inputMode="numeric" pattern="[0-9]{4}|.{6,}" maxLength={40} placeholder="비워두면 임의 생성"/></label>
+      <label>새 비밀번호(숫자 4자리 또는 6자 이상, 비우면 자동 생성)<input name="password" inputMode="numeric" pattern="[0-9]{4}|.{6,}" maxLength={40} placeholder="비워두면 임의 생성"/></label>
       <div className="header-actions"><button className="button primary" disabled={resetBusy}>{resetBusy?'처리 중…':'재설정'}</button><button type="button" className="button quiet" onClick={()=>{setResettingStudent(null);setResetResult(null)}}>닫기</button></div>
       {resetResult&&<p role="status" className="notice">새 비밀번호: <b>{resetResult.password}</b> — 학생에게 알려주세요.</p>}
     </form>}
     <section className="panel section">
       <div className="section-heading"><h3>구글 시트로 명단·계정 한꺼번에 만들기</h3></div>
-      <p className="muted">시트 첫 줄에 <b>학년, 이름</b>(선택: <b>비밀번호</b>) 열을 두고 "링크가 있는 모든 사용자 - 뷰어"로 공유한 뒤 링크를 붙여넣어 주세요. 명단에 없는 학생은 추가하고, 로그인 계정을 만들거나(이미 있으면 비밀번호를 바꿉니다) 숫자 4자리 비밀번호를 정합니다. 비밀번호 열이 비어 있으면 자동으로 만듭니다. 한 번에 최대 40명.</p>
+      <p className="muted">시트 첫 줄에 <b>학년, 이름</b>(선택: <b>번호</b>, <b>비밀번호</b>) 열을 두고 "링크가 있는 모든 사용자 - 뷰어"로 공유한 뒤 링크를 붙여넣어 주세요. 명단에 없는 학생은 추가하고, 로그인 계정을 만들거나 이미 있으면 비밀번호를 바꿉니다. 비밀번호 칸이 비어 있으면 <b>연도·학년·번호</b>로 기본 비밀번호를 정합니다(예: 2026년 1학년 1번 → 260101). 번호 열이 없으면 시트에서 그 학년의 순서를 번호로 씁니다. 한 번에 최대 40명.</p>
       <form className="assignment-form" onSubmit={importRosterSheet}>
         <label>구글 시트 링크<input name="sheetUrl" type="url" required placeholder="https://docs.google.com/spreadsheets/d/..."/></label>
         <button className="button primary" disabled={rosterSheetBusy}>{rosterSheetBusy?'만드는 중…(1분 정도 걸려요)':'명단·계정 만들기'}</button>
       </form>
       {rosterSheetResults&&<>
-        <p className="notice">성공 {rosterSheetResults.filter(r=>r.ok).length}명 · 실패 {rosterSheetResults.filter(r=>!r.ok).length}명. 학생은 로그인 화면에서 <b>학교 코드 {rosterSheetCode}</b>, 학년, 이름, 아래 비밀번호(숫자 4자리)를 입력합니다. 이 표는 다시 볼 수 없으니 지금 옮겨 적거나 인쇄해 두세요.</p>
+        <p className="notice">성공 {rosterSheetResults.filter(r=>r.ok).length}명 · 실패 {rosterSheetResults.filter(r=>!r.ok).length}명. 학생은 로그인 화면에서 <b>학교 코드 {rosterSheetCode}</b>, 학년, 이름, 아래 비밀번호를 입력합니다. 이 표는 다시 볼 수 없으니 지금 옮겨 적거나 인쇄해 두세요.</p>
         <div className="table-scroll"><table><thead><tr><th>학년</th><th>이름</th><th>비밀번호</th><th>결과</th></tr></thead><tbody>
           {rosterSheetResults.map((r,i)=><tr key={i}><td>{r.grade}학년</td><td>{r.name}</td><td>{r.ok?<b>{r.pin}</b>:'-'}</td><td>{r.ok?(r.status==='created'?'새 계정':'비밀번호 변경'):<span className="error">{r.error}</span>}</td></tr>)}
         </tbody></table></div>

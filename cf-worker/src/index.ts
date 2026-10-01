@@ -53,6 +53,9 @@ function randomPassword(){return String(100000+(crypto.getRandomValues(new Uint3
 function studentAuthPassword(input:string){const v=input.trim();return /^\d{4}$/.test(v)?`${v}-jobedu`:v}
 function randomPin(){return String(crypto.getRandomValues(new Uint32Array(1))[0]%10000).padStart(4,'0')}
 function validStudentPassword(v:string){return /^\d{4}$/.test(v)||v.length>=6}
+// 시트로 계정을 만들 때 비밀번호 칸이 비어 있으면 쓰는 기본 비밀번호(사용자 요청, D-113):
+// 연도 끝 2자리 + 학년 2자리 + 번호 2자리. 예) 2026년 1학년 1번 → 260101.
+export function defaultStudentPassword(year:number,grade:string,number:number){return `${String(year%100).padStart(2,'0')}${grade.padStart(2,'0')}${String(number).padStart(2,'0')}`}
 function normalizeGrade(v:string){const m=v.trim().match(/^([1-6])(?:학년)?$/);return m?m[1]:''}
 
 async function verifyCallerUid(idToken:string,projectId:string){
@@ -319,7 +322,7 @@ interface ImportRowResult {grade:string;name:string;ok:boolean;pin?:string;statu
 export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:string,schoolCode:string,schoolDisplayName:string,sheetUrl:string):Promise<ImportRowResult[]>{
   const rows=parseCsv(await fetchSheetCsv(sheetUrl));
   const header=(rows[0]??[]).map(c=>c.trim());
-  const gi=header.indexOf('학년'),ni=header.indexOf('이름'),pi=header.indexOf('비밀번호');
+  const gi=header.indexOf('학년'),ni=header.indexOf('이름'),pi=header.indexOf('비밀번호'),bi=header.indexOf('번호');
   if(gi<0||ni<0)throw new UserInputError('시트 첫 줄에 "학년"과 "이름" 열이 있어야 합니다.');
   const body=rows.slice(1);
   if(!body.length)throw new UserInputError('시트에서 학생 행을 찾지 못했습니다.');
@@ -328,13 +331,19 @@ export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:
   const results:ImportRowResult[]=[];
   const planned:{grade:string;name:string;pin:string;email:string;studentId:string;isNew:boolean}[]=[];
   const seen=new Set<string>();
+  // 번호: 시트에 "번호" 열이 있으면 그 값, 없으면 시트에서 그 학년의 몇 번째 학생인지.
+  const orderInGrade=new Map<string,number>();
+  const thisYear=new Date().getFullYear();
   for(const cols of body){
     const grade=normalizeGrade(cols[gi]??''),name=(cols[ni]??'').trim().normalize('NFC'),rawPin=pi>=0?(cols[pi]??'').trim():'';
     if(!grade||!name||name.length>40){results.push({grade:cols[gi]??'',name:name||'(이름 없음)',ok:false,error:'학년(1~6)과 이름을 확인해 주세요.'});continue}
     if(seen.has(grade+'|'+name)){results.push({grade,name,ok:false,error:'같은 학년·이름이 시트에 두 번 있어요.'});continue}
     seen.add(grade+'|'+name);
-    const pin=rawPin||randomPin();
-    if(!validStudentPassword(pin)){results.push({grade,name,ok:false,error:'비밀번호는 숫자 4자리여야 합니다.'});continue}
+    const order=(orderInGrade.get(grade)??0)+1;orderInGrade.set(grade,order);
+    const rawNumber=bi>=0?Number((cols[bi]??'').trim()):NaN;
+    const number=Number.isInteger(rawNumber)&&rawNumber>=1&&rawNumber<=99?rawNumber:order;
+    const pin=rawPin||defaultStudentPassword(thisYear,grade,number);
+    if(!validStudentPassword(pin)){results.push({grade,name,ok:false,error:'비밀번호는 숫자 4자리 또는 6자 이상이어야 합니다.'});continue}
     const matches=existing.filter(s=>s.name===name&&String(s.grade)===grade&&s.status==='active');
     if(matches.length>1){results.push({grade,name,ok:false,error:'명단에 같은 학년·이름이 여러 명 있어요. 한 명씩 수정해 주세요.'});continue}
     planned.push({grade,name,pin,email:studentLoginEmail(schoolCode,grade,name),studentId:matches[0]?.id??crypto.randomUUID(),isNew:!matches.length});

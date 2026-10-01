@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from 'vitest';
-import {importRosterFromSheet,updateStudentProfile,type Env} from '../cf-worker/src/index';
+import {defaultStudentPassword,importRosterFromSheet,updateStudentProfile,type Env} from '../cf-worker/src/index';
 
 // 관리 서버(Worker)의 명단·계정 만들기/학생 수정 로직을 가짜 Google API로 확인한다(실제 계정은 건드리지 않음).
 const env:Env={GOOGLE_CLIENT_EMAIL:'x',GOOGLE_PRIVATE_KEY_B64:'x',FIREBASE_PROJECT_ID:'demo',ALLOWED_ORIGIN:'x'};
@@ -29,11 +29,12 @@ describe('시트로 명단·계정 만들기',()=>{
     const calls=fakeGoogle({csv:'학년,이름\n1학년,고지윤\n6,김하늘\n',students:[{id:'s1',name:'고지윤',grade:1}],existingEmails:['마동-1-고지윤@students.jobedu.local']});
     const results=await importRosterFromSheet(env,'tok','school1','마동','마동초등학교','https://docs.google.com/spreadsheets/d/abc/edit');
     expect(results.map(r=>[r.grade,r.name,r.ok,r.status])).toEqual([['1','고지윤',true,'reset'],['6','김하늘',true,'created']]);
-    for(const r of results)expect(r.pin).toMatch(/^\d{4}$/);
+    const yy=String(new Date().getFullYear()%100).padStart(2,'0');
+    expect(results.map(r=>r.pin)).toEqual([`${yy}0101`,`${yy}0601`]);
     const signUp=calls.find(c=>c.url.endsWith('accounts:signUp'))!;
-    expect(signUp.body).toMatchObject({email:'마동-6-김하늘@students.jobedu.local',password:`${results[1].pin}-jobedu`});
+    expect(signUp.body).toMatchObject({email:'마동-6-김하늘@students.jobedu.local',password:`${yy}0601`});
     const update=calls.find(c=>c.url.endsWith('accounts:update'))!;
-    expect(update.body.password).toBe(`${results[0].pin}-jobedu`);
+    expect(update.body.password).toBe(`${yy}0101`);
     const commit=calls.find(c=>c.url.endsWith(':commit'))!;
     const paths=commit.body.writes.map((w:any)=>w.update.name.split('/documents/')[1]);
     expect(paths.filter((p:string)=>p.includes('/students/'))).toHaveLength(1); // 기존 학생은 명단 문서를 다시 만들지 않는다
@@ -49,6 +50,19 @@ describe('시트로 명단·계정 만들기',()=>{
   it('학년·이름 열이 없으면 거부한다',async()=>{
     fakeGoogle({csv:'이름,반\n가,1\n'});
     await expect(importRosterFromSheet(env,'tok','school1','마동','마동초등학교','https://docs.google.com/spreadsheets/d/abc/edit')).rejects.toThrow('학년');
+  });
+});
+
+describe('기본 비밀번호 규칙(연도·학년·번호)',()=>{
+  it('2026년 1학년 1번은 260101',()=>{expect(defaultStudentPassword(2026,'1',1)).toBe('260101');expect(defaultStudentPassword(2026,'6',14)).toBe('260614')});
+  it('번호 열이 없으면 학년별 시트 순서, 있으면 그 번호를 쓴다',async()=>{
+    fakeGoogle({csv:'학년,이름\n4,가\n4,나\n5,다\n'});
+    let r=await importRosterFromSheet(env,'tok','s','마동','마동초','https://docs.google.com/spreadsheets/d/abc/edit');
+    const yy=String(new Date().getFullYear()%100).padStart(2,'0');
+    expect(r.map(x=>[x.name,x.pin])).toEqual([['가',`${yy}0401`],['나',`${yy}0402`],['다',`${yy}0501`]]);
+    fakeGoogle({csv:'학년,번호,이름\n4,7,가\n'});
+    r=await importRosterFromSheet(env,'tok','s','마동','마동초','https://docs.google.com/spreadsheets/d/abc/edit');
+    expect(r[0].pin).toBe(`${yy}0407`);
   });
 });
 
