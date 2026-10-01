@@ -29,3 +29,12 @@ describe('학생 로그인 이메일 합성',()=>{
     expect(studentLoginEmail(' 마동초등학교 ','4','김민준')).toBe(base);
   });
 });
+import {studentAuthPassword} from '../src/domain/studentAuth';
+describe('학생 숫자 4자리 비밀번호',()=>{
+  it('4자리 숫자만 내부 비밀번호로 늘리고, 기존 6자 이상 비밀번호는 그대로 둔다',()=>{
+    expect(studentAuthPassword('0427')).toBe('0427-jobedu');
+    expect(studentAuthPassword(' 1234 ')).toBe('1234-jobedu');
+    expect(studentAuthPassword('123456')).toBe('123456');
+    expect(studentAuthPassword('12345')).toBe('12345');
+  });
+});

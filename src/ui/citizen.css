@@ -50,3 +50,7 @@
   .citizen-building-head h1{font-size:1.3rem}
   .guide-building-list{grid-template-columns:1fr}
 }
+.roster-accordion>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none}
+.roster-accordion>summary::-webkit-details-marker{display:none}
+.roster-accordion>summary h2::before{content:'▸ ';color:#7a8596}
+.roster-accordion[open]>summary h2::before{content:'▾ '}

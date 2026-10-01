@@ -47,6 +47,8 @@ function studentLoginEmail(schoolCode,grade,name){
   return `${parts.join('-')}@students.jobedu.local`;
 }
 function randomPassword(){return String(Math.floor(100000+Math.random()*900000))}
+// 학생 숫자 4자리 비밀번호(D-111) — src/domain/studentAuth.ts·cf-worker와 같은 규칙.
+function studentAuthPassword(v){v=String(v).trim();return /^\d{4}$/.test(v)?`${v}-jobedu`:v}
 
 const passwordBookPath=arg('book','.student-passwords.json');
 function loadPasswordBook(){if(!existsSync(passwordBookPath))return{};try{return JSON.parse(readFileSync(passwordBookPath,'utf8'))}catch{return{}}}
@@ -113,7 +115,7 @@ async function createStudentAccounts(){
       if(!book[email])book[email]={name:s.name,grade:s.grade,schoolCode,schoolId,password:'(알 수 없음 — reset-student-password로 재설정하세요)'};
     }catch{
       const password=sharedPassword||randomPassword();
-      const user=await auth.createUser({email,password});
+      const user=await auth.createUser({email,password:studentAuthPassword(password)});
       await db.doc(`schools/${schoolId}/members/${user.uid}`).set({schoolId,role:'student',studentId:studentDoc.id,status:'active'});
       await db.doc(`userSchools/${user.uid}/links/${schoolId}`).set({schoolId,schoolName});
       book[email]={name:s.name,grade:s.grade,schoolCode,schoolId,password};
@@ -135,7 +137,7 @@ async function resetStudentPassword(){
   let user;
   try{user=await auth.getUserByEmail(email)}
   catch{console.error(`계정을 찾을 수 없습니다: ${email}\n학교코드·학년·이름이 맞는지 확인해 주세요.`);process.exit(1)}
-  await auth.updateUser(user.uid,{password});
+  await auth.updateUser(user.uid,{password:studentAuthPassword(password)});
   const book=loadPasswordBook();
   book[email]={name,grade:Number(grade),schoolCode,schoolId,password};
   savePasswordBook(book);

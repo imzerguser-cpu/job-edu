@@ -47,6 +47,13 @@ function studentLoginEmail(schoolCode:string,grade:string,name:string){
   return `${parts.join('-')}@students.jobedu.local`;
 }
 function randomPassword(){return String(100000+(crypto.getRandomValues(new Uint32Array(1))[0]%900000))}
+// 학생 비밀번호는 숫자 4자리(PIN)로 간단하게 쓴다(사용자 요청, D-111). Firebase Auth는 6자 이상만
+// 받으므로, 4자리 숫자는 앱·Worker·관리 스크립트가 똑같이 내부 비밀번호로 늘려서 쓴다.
+// Keep in lockstep with studentAuthPassword in src/domain/studentAuth.ts and scripts/admin-bootstrap.mjs.
+function studentAuthPassword(input:string){const v=input.trim();return /^\d{4}$/.test(v)?`${v}-jobedu`:v}
+function randomPin(){return String(crypto.getRandomValues(new Uint32Array(1))[0]%10000).padStart(4,'0')}
+function validStudentPassword(v:string){return /^\d{4}$/.test(v)||v.length>=6}
+function normalizeGrade(v:string){const m=v.trim().match(/^([1-6])(?:학년)?$/);return m?m[1]:''}
 
 async function verifyCallerUid(idToken:string,projectId:string){
   const {payload}=await jwtVerify(idToken,firebaseJwks,{issuer:`https://securetoken.google.com/${projectId}`,audience:projectId});
@@ -260,18 +267,118 @@ async function bulkResetPasswords(accessToken:string,sheetUrl:string,expectedSch
     // students.
     if(canonicalSchoolCode(schoolCode)!==expectedSchoolCode){results.push({name,grade,ok:false,error:'다른 학교 학생은 여기서 변경할 수 없습니다.'});continue}
     try{
-      const email=studentLoginEmail(schoolCode,grade,name);
+      const email=studentLoginEmail(schoolCode,normalizeGrade(grade)||grade,name);
       const targetUid=await lookupUid(accessToken,email);
       if(!targetUid){results.push({name,grade,ok:false,error:'계정을 찾을 수 없습니다.'});continue}
-      const password=passwordCol||randomPassword();
-      if(password.length<6){results.push({name,grade,ok:false,error:'비밀번호는 6자 이상이어야 합니다.'});continue}
-      await setPassword(accessToken,targetUid,password);
+      const password=passwordCol||randomPin();
+      if(!validStudentPassword(password)){results.push({name,grade,ok:false,error:'비밀번호는 숫자 4자리 또는 6자 이상이어야 합니다.'});continue}
+      await setPassword(accessToken,targetUid,studentAuthPassword(password));
       results.push({name,grade,ok:true,password});
     }catch(err){
       results.push({name,grade,ok:false,error:err instanceof Error?err.message:'처리 실패'});
     }
   }
   return results;
+}
+
+// ── 시트로 명단 + 계정 한꺼번에 만들기 / 학생 정보 수정 (D-111, D-112) ──
+const MAX_IMPORT_ROWS=40; // 무료 요금제 하위 요청 한도(~50): 학생당 1회(계정 생성/변경) + 고정 약 7회
+const FS=(env:Env)=>`https://firestore.googleapis.com/v1/projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents`;
+const docName=(env:Env,path:string)=>`projects/${env.FIREBASE_PROJECT_ID}/databases/(default)/documents/${path}`;
+type FsValue={stringValue?:string;integerValue?:string;nullValue?:null;timestampValue?:string};
+async function listStudents(env:Env,accessToken:string,schoolId:string){
+  const out:{id:string;name:string;grade:number;status:string}[]=[];let pageToken='';
+  for(let i=0;i<5;i++){
+    const res=await fetch(`${FS(env)}/schools/${encodeURIComponent(schoolId)}/students?pageSize=300${pageToken?`&pageToken=${pageToken}`:''}`,{headers:{Authorization:`Bearer ${accessToken}`}});
+    if(!res.ok)throw new Error('학생 명단을 불러오지 못했습니다.');
+    const data=await res.json() as {documents?:{name:string;fields?:Record<string,FsValue>}[];nextPageToken?:string};
+    for(const d of data.documents??[])out.push({id:d.name.split('/').pop()!,name:d.fields?.name?.stringValue??'',grade:Number(d.fields?.grade?.integerValue??0),status:d.fields?.status?.stringValue??''});
+    if(!data.nextPageToken)break;pageToken=encodeURIComponent(data.nextPageToken);
+  }
+  return out;
+}
+async function lookupUids(accessToken:string,emails:string[]){
+  const map=new Map<string,string>();if(!emails.length)return map;
+  const res=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:lookup',{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({email:emails})});
+  if(!res.ok)throw new Error('학생 계정 조회에 실패했습니다.');
+  const data=await res.json() as {users?:{localId:string;email:string}[]};
+  for(const u of data.users??[])map.set(u.email.toLowerCase(),u.localId);
+  return map;
+}
+async function firestoreCommit(env:Env,accessToken:string,writes:{path:string;fields:Record<string,FsValue>;mask?:string[];mustNotExist?:boolean}[]){
+  if(!writes.length)return;
+  const res=await fetch(`${FS(env)}:commit`,{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({writes:writes.map(w=>({
+    update:{name:docName(env,w.path),fields:w.fields},
+    ...(w.mask?{updateMask:{fieldPaths:w.mask}}:{}),
+    ...(w.mustNotExist?{currentDocument:{exists:false}}:{}),
+  }))})});
+  if(!res.ok)throw new Error('명단 저장에 실패했습니다: '+(await res.text()).slice(0,200));
+}
+const str=(v:string|null):FsValue=>v===null?{nullValue:null}:{stringValue:v};
+interface ImportRowResult {grade:string;name:string;ok:boolean;pin?:string;status?:'created'|'reset';error?:string}
+export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:string,schoolCode:string,schoolDisplayName:string,sheetUrl:string):Promise<ImportRowResult[]>{
+  const rows=parseCsv(await fetchSheetCsv(sheetUrl));
+  const header=(rows[0]??[]).map(c=>c.trim());
+  const gi=header.indexOf('학년'),ni=header.indexOf('이름'),pi=header.indexOf('비밀번호');
+  if(gi<0||ni<0)throw new UserInputError('시트 첫 줄에 "학년"과 "이름" 열이 있어야 합니다.');
+  const body=rows.slice(1);
+  if(!body.length)throw new UserInputError('시트에서 학생 행을 찾지 못했습니다.');
+  if(body.length>MAX_IMPORT_ROWS)throw new UserInputError(`한 번에 최대 ${MAX_IMPORT_ROWS}명까지 처리할 수 있습니다. 시트를 나눠서 올려 주세요.`);
+  const existing=await listStudents(env,accessToken,schoolId);
+  const results:ImportRowResult[]=[];
+  const planned:{grade:string;name:string;pin:string;email:string;studentId:string;isNew:boolean}[]=[];
+  const seen=new Set<string>();
+  for(const cols of body){
+    const grade=normalizeGrade(cols[gi]??''),name=(cols[ni]??'').trim().normalize('NFC'),rawPin=pi>=0?(cols[pi]??'').trim():'';
+    if(!grade||!name||name.length>40){results.push({grade:cols[gi]??'',name:name||'(이름 없음)',ok:false,error:'학년(1~6)과 이름을 확인해 주세요.'});continue}
+    if(seen.has(grade+'|'+name)){results.push({grade,name,ok:false,error:'같은 학년·이름이 시트에 두 번 있어요.'});continue}
+    seen.add(grade+'|'+name);
+    const pin=rawPin||randomPin();
+    if(!validStudentPassword(pin)){results.push({grade,name,ok:false,error:'비밀번호는 숫자 4자리여야 합니다.'});continue}
+    const matches=existing.filter(s=>s.name===name&&String(s.grade)===grade&&s.status==='active');
+    if(matches.length>1){results.push({grade,name,ok:false,error:'명단에 같은 학년·이름이 여러 명 있어요. 한 명씩 수정해 주세요.'});continue}
+    planned.push({grade,name,pin,email:studentLoginEmail(schoolCode,grade,name),studentId:matches[0]?.id??crypto.randomUUID(),isNew:!matches.length});
+  }
+  const uids=await lookupUids(accessToken,planned.map(p=>p.email));
+  const now=new Date().toISOString(),year=String(new Date().getFullYear());
+  const writes:Parameters<typeof firestoreCommit>[2]=[];
+  for(const p of planned){
+    try{
+      let uid=uids.get(p.email.toLowerCase());
+      const status:ImportRowResult['status']=uid?'reset':'created';
+      if(uid)await setPassword(accessToken,uid,studentAuthPassword(p.pin));
+      else uid=await createAuthUser(accessToken,p.email,studentAuthPassword(p.pin));
+      if(p.isNew)writes.push({path:`schools/${schoolId}/students/${p.studentId}`,mustNotExist:true,fields:{schoolId:str(schoolId),name:str(p.name),grade:{integerValue:p.grade},className:str(null),citizenCode:str(`C-${p.studentId}`),schoolYear:{integerValue:year},status:str('active'),schemaVersion:{integerValue:'1'},createdAt:{timestampValue:now},updatedAt:{timestampValue:now}}});
+      writes.push({path:`schools/${schoolId}/members/${uid}`,fields:{schoolId:str(schoolId),role:str('student'),studentId:str(p.studentId),status:str('active')}});
+      writes.push({path:`userSchools/${uid}/links/${schoolId}`,fields:{schoolId:str(schoolId),schoolName:str(schoolDisplayName)}});
+      results.push({grade:p.grade,name:p.name,ok:true,pin:p.pin,status});
+    }catch(err){results.push({grade:p.grade,name:p.name,ok:false,error:err instanceof Error?err.message:'처리 실패'})}
+  }
+  await firestoreCommit(env,accessToken,writes);
+  return results.sort((a,b)=>Number(a.grade)-Number(b.grade)||a.name.localeCompare(b.name,'ko'));
+}
+async function updateAuthAccount(accessToken:string,uid:string,patch:{email?:string;password?:string}){
+  const res=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:update',{method:'POST',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},body:JSON.stringify({localId:uid,...patch,returnSecureToken:false})});
+  if(res.ok)return;
+  let code='';try{code=((await res.json()) as {error?:{message?:string}}).error?.message??''}catch{/* not JSON */}
+  if(code.startsWith('EMAIL_EXISTS'))throw new UserInputError('같은 학년에 같은 이름의 학생 계정이 이미 있어요.');
+  throw new Error('계정 수정에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+}
+// 학년·이름이 바뀌면 로그인 아이디(합성 이메일)도 바뀌어야 하므로 명단 문서와 로그인 계정을 함께 고친다.
+export async function updateStudentProfile(env:Env,accessToken:string,schoolId:string,schoolCode:string,input:{studentId:string;grade:string;name:string;password:string}){
+  const grade=normalizeGrade(input.grade),name=input.name.trim().normalize('NFC'),pin=input.password.trim();
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(input.studentId))throw new UserInputError('학생을 확인해 주세요.');
+  if(!grade||!name||name.length>40)throw new UserInputError('학년(1~6)과 이름(40자 이하)을 확인해 주세요.');
+  if(pin&&!validStudentPassword(pin))throw new UserInputError('비밀번호는 숫자 4자리 또는 6자 이상이어야 합니다.');
+  const res=await fetch(`${FS(env)}/schools/${encodeURIComponent(schoolId)}/students/${input.studentId}`,{headers:{Authorization:`Bearer ${accessToken}`}});
+  if(!res.ok)throw new UserInputError('학생을 찾을 수 없습니다.');
+  const doc=await res.json() as {fields?:Record<string,FsValue>};
+  const oldName=doc.fields?.name?.stringValue??'',oldGrade=String(doc.fields?.grade?.integerValue??'');
+  const oldEmail=studentLoginEmail(schoolCode,oldGrade,oldName),newEmail=studentLoginEmail(schoolCode,grade,name);
+  const uid=await lookupUid(accessToken,oldEmail);
+  if(uid&&(oldEmail!==newEmail||pin))await updateAuthAccount(accessToken,uid,{...(oldEmail!==newEmail?{email:newEmail}:{}),...(pin?{password:studentAuthPassword(pin)}:{})});
+  await firestoreCommit(env,accessToken,[{path:`schools/${schoolId}/students/${input.studentId}`,mask:['name','grade','updatedAt'],fields:{name:str(name),grade:{integerValue:grade},updatedAt:{timestampValue:new Date().toISOString()}}}]);
+  return {hasAccount:!!uid,grade,name,password:pin||null};
 }
 
 export default {
@@ -284,7 +391,7 @@ export default {
       if(!idToken)return json({error:'로그인이 필요합니다.'},401,origin);
       const uid=await verifyCallerUid(idToken,env.FIREBASE_PROJECT_ID);
 
-      const body=await request.json() as {schoolId?:string;schoolCode?:string;grade?:string;name?:string;password?:string;sheetUrl?:string;action?:string;email?:string};
+      const body=await request.json() as {schoolId?:string;schoolCode?:string;grade?:string;name?:string;password?:string;sheetUrl?:string;action?:string;email?:string;studentId?:string};
       const {schoolId,sheetUrl,action}=body;
       if(!schoolId)return json({error:'학교 정보가 없습니다.'},400,origin);
 
@@ -320,13 +427,25 @@ export default {
         return json({email,password:newPassword},200,origin);
       }
 
+      if(action==='importRoster'||action==='updateStudent'){
+        const accessToken=await googleAccessToken(env,'https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/datastore');
+        if(!await isActiveTeacher(env,accessToken,schoolId,uid))return json({error:'교사 권한이 필요합니다.'},403,origin);
+        const displayName=await schoolName(env,accessToken,schoolId),code=canonicalSchoolCode(displayName);
+        if(action==='importRoster'){
+          if(!sheetUrl)return json({error:'구글 시트 링크를 붙여넣어 주세요.'},400,origin);
+          const results=await importRosterFromSheet(env,accessToken,schoolId,code,displayName,sheetUrl);
+          return json({results,schoolCode:code},200,origin);
+        }
+        return json(await updateStudentProfile(env,accessToken,schoolId,code,{studentId:body.studentId??'',grade:body.grade??'',name:body.name??'',password:body.password??''}),200,origin);
+      }
+
       // Validate the request shape before spending any subrequests on it.
       let password='';
       if(!sheetUrl){
         const {schoolCode,grade,name}=body;
         if(!schoolCode||!grade||!name)return json({error:'학교 코드·학년·이름을 모두 입력해 주세요.'},400,origin);
-        password=(body.password??'').trim()||randomPassword();
-        if(password.length<6)return json({error:'비밀번호는 6자 이상이어야 합니다.'},400,origin);
+        password=(body.password??'').trim()||randomPin();
+        if(!validStudentPassword(password))return json({error:'비밀번호는 숫자 4자리 또는 6자 이상이어야 합니다.'},400,origin);
       }
 
       const accessToken=await googleAccessToken(env,'https://www.googleapis.com/auth/identitytoolkit https://www.googleapis.com/auth/datastore');
@@ -345,7 +464,7 @@ export default {
       const targetUid=await lookupUid(accessToken,email);
       if(!targetUid)return json({error:'해당 학생 계정을 찾을 수 없습니다. 학년·이름을 확인해 주세요.'},404,origin);
 
-      await setPassword(accessToken,targetUid,password);
+      await setPassword(accessToken,targetUid,studentAuthPassword(password));
       return json({email,password},200,origin);
     }catch(err){
       const status=err instanceof UserInputError?400:500;
