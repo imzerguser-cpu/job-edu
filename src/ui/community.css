@@ -14,7 +14,7 @@
 .citizen-hud-avatar{width:56px;height:60px;object-fit:contain;background:transparent;border-radius:0}.citizen-hud-profile b{font-size:1.1rem}
 .citizen-hud-stat{background:#eef4e7;border-radius:12px;padding:12px 18px}.citizen-hud-stat b{color:#326843}
 .citizen-explore{display:grid;gap:20px}.map-intro{display:flex;align-items:end;justify-content:space-between;gap:16px}.map-intro .eyebrow{margin-bottom:7px;font-size:.8rem}.map-intro h2{font-size:1.6rem}.map-intro p{font-size:.875rem;margin:0}
-.citizen-map{border:5px solid #fff;border-radius:24px;box-shadow:0 10px 32px #2f4d3212}.citizen-hotspot:focus-visible{outline:4px solid #ffe28c;outline-offset:-4px;background:#fff3}.citizen-hotspot:focus-visible span{opacity:1}
+.citizen-map{border:5px solid #fff;border-radius:24px;box-shadow:0 10px 32px #2f4d3212}
 .destination-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
 .destination{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #dce5d7;border-radius:16px;background:#fff;color:#294535;font-weight:700;min-height:82px;text-align:left;box-shadow:0 3px 0 #e6ebdf;transition:background .15s,transform .15s}
 .destination:hover{background:#f0f6e9;transform:translateY(-2px)}.destination img{width:48px;height:54px;object-fit:contain;flex-shrink:0}.destination-arrow{margin-left:auto;color:#6c8468;font-size:.8rem}

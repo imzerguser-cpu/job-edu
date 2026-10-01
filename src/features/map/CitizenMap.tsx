@@ -1,6 +1,7 @@
 import {departments} from '../../domain/jobs';
 import {buildings,type BuildingId} from './buildings';
 import {DestinationIcon} from './DestinationIcon';
+import {outlineGeometry} from './buildingOutlines';
 
 export function CitizenMap({onNavigate}:{onNavigate:(id:BuildingId)=>void}){
   return <section className="citizen-explore" aria-label="우리 사회 둘러보기">
@@ -10,10 +11,11 @@ export function CitizenMap({onNavigate}:{onNavigate:(id:BuildingId)=>void}){
     {buildings.map(b=>{
       const dept=b.departmentId?departments.find(d=>d.id===b.departmentId):null;
       const tooltip=dept?`${dept.name} · ${b.label}`:b.label;
+      const {viewBox,points,...style}=outlineGeometry(b.id);
       return <button key={b.id} className="citizen-hotspot"
-        style={{left:`${b.hotspot.left}%`,top:`${b.hotspot.top}%`,width:`${b.hotspot.width}%`,height:`${b.hotspot.height}%`}}
-        onClick={()=>onNavigate(b.id)} aria-label={tooltip}>
-        <span>{tooltip}</span>
+        style={style}
+        onClick={()=>onNavigate(b.id)} aria-label={tooltip} title={tooltip}>
+        <svg viewBox={viewBox} preserveAspectRatio="none" aria-hidden="true"><polygon points={points} vectorEffect="non-scaling-stroke"/></svg>
       </button>;
     })}
     </div>
