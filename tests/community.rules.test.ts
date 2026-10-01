@@ -165,3 +165,13 @@ describe('나를 찾는 모험(진로 자기이해)',()=>{
     await assertFails(setDoc(doc(db('a-one'),'schools/a/careerProfiles/one'),{schoolId:'a',studentId:'one',...s,completions:5,schemaVersion:1,createdAt:Timestamp.now(),updatedAt:serverTimestamp()}));
   });
 });
+
+describe('학생 번호(학년 안 출석번호)',()=>{
+  it('교사는 번호를 1~99로 저장할 수 있고, 범위 밖이면 거부된다',async()=>{
+    await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'schools/a/students/full'),{schoolId:'a',name:'가나',grade:4,className:null,citizenCode:'C-full',schoolYear:2026,status:'active',schemaVersion:1,createdAt:Timestamp.now(),updatedAt:Timestamp.now()})});
+    const t=db('teacher-a');
+    await assertSucceeds(updateDoc(doc(t,'schools/a/students/full'),{number:3,updatedAt:serverTimestamp()}));
+    await assertFails(updateDoc(doc(t,'schools/a/students/full'),{number:0,updatedAt:serverTimestamp()}));
+    await assertFails(updateDoc(doc(db('a-one'),'schools/a/students/full'),{number:5,updatedAt:serverTimestamp()}));
+  });
+});

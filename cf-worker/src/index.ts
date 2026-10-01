@@ -331,7 +331,7 @@ export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:
   if(body.length>MAX_IMPORT_ROWS)throw new UserInputError(`한 번에 최대 ${MAX_IMPORT_ROWS}명까지 처리할 수 있습니다. 시트를 나눠서 올려 주세요.`);
   const existing=await listStudents(env,accessToken,schoolId);
   const results:ImportRowResult[]=[];
-  const planned:{grade:string;name:string;pin:string;email:string;studentId:string;isNew:boolean}[]=[];
+  const planned:{grade:string;name:string;number:number;pin:string;email:string;studentId:string;isNew:boolean}[]=[];
   const seen=new Set<string>();
   // 번호: 시트에 "번호" 열이 있으면 그 값, 없으면 시트에서 그 학년의 몇 번째 학생인지.
   const orderInGrade=new Map<string,number>();
@@ -348,7 +348,7 @@ export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:
     if(!validStudentPassword(pin)){results.push({grade,name,ok:false,error:'비밀번호는 숫자 4자리 또는 6자 이상이어야 합니다.'});continue}
     const matches=existing.filter(s=>s.name===name&&String(s.grade)===grade&&s.status==='active');
     if(matches.length>1){results.push({grade,name,ok:false,error:'명단에 같은 학년·이름이 여러 명 있어요. 한 명씩 수정해 주세요.'});continue}
-    planned.push({grade,name,pin,email:studentLoginEmail(schoolCode,grade,name),studentId:matches[0]?.id??crypto.randomUUID(),isNew:!matches.length});
+    planned.push({grade,name,number,pin,email:studentLoginEmail(schoolCode,grade,name),studentId:matches[0]?.id??crypto.randomUUID(),isNew:!matches.length});
   }
   const uids=await lookupUids(accessToken,planned.map(p=>p.email));
   const now=new Date().toISOString(),year=String(new Date().getFullYear());
@@ -359,7 +359,9 @@ export async function importRosterFromSheet(env:Env,accessToken:string,schoolId:
       const status:ImportRowResult['status']=uid?'reset':'created';
       if(uid)await setPassword(accessToken,uid,studentAuthPassword(p.pin));
       else uid=await createAuthUser(accessToken,p.email,studentAuthPassword(p.pin));
-      if(p.isNew)writes.push({path:`schools/${schoolId}/students/${p.studentId}`,mustNotExist:true,fields:{schoolId:str(schoolId),name:str(p.name),grade:{integerValue:p.grade},className:str(null),citizenCode:str(`C-${p.studentId}`),schoolYear:{integerValue:year},status:str('active'),schemaVersion:{integerValue:'1'},createdAt:{timestampValue:now},updatedAt:{timestampValue:now}}});
+      if(p.isNew)writes.push({path:`schools/${schoolId}/students/${p.studentId}`,mustNotExist:true,fields:{schoolId:str(schoolId),name:str(p.name),grade:{integerValue:p.grade},number:{integerValue:String(p.number)},className:str(null),citizenCode:str(`C-${p.studentId}`),schoolYear:{integerValue:year},status:str('active'),schemaVersion:{integerValue:'1'},createdAt:{timestampValue:now},updatedAt:{timestampValue:now}}});
+      // 기존 학생은 번호만 채워 넣는다(학년 안 번호순 정렬용, D-116).
+      if(!p.isNew)writes.push({path:`schools/${schoolId}/students/${p.studentId}`,mask:['number'],fields:{number:{integerValue:String(p.number)}}});
       writes.push({path:`schools/${schoolId}/members/${uid}`,fields:{schoolId:str(schoolId),role:str('student'),studentId:str(p.studentId),status:str('active')}});
       writes.push({path:`userSchools/${uid}/links/${schoolId}`,fields:{schoolId:str(schoolId),schoolName:str(schoolDisplayName)}});
       results.push({grade:p.grade,name:p.name,ok:true,pin:p.pin,status});

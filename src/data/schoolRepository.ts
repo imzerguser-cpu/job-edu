@@ -55,9 +55,10 @@ export async function updateStudent(db:Firestore,context:SchoolContext,student:S
   if(!isTeacher(context.membership))throw new Error('교사 권한이 필요합니다.');
   if(!Number.isInteger(student.grade)||student.grade<1||student.grade>6)throw new Error('학년을 확인해 주세요.');
   if(student.className&&student.className.length>20)throw new Error('반 이름은 20자 이하로 입력해 주세요.');
+  if(student.number!=null&&(!Number.isInteger(student.number)||student.number<1||student.number>99))throw new Error('번호는 1~99 사이로 입력해 주세요.');
   if(!(['active','graduated','transferred'] as const).includes(student.status))throw new Error('상태를 확인해 주세요.');
   await updateDoc(doc(db,schoolPath(context,'students',student.id)),{
-    name:student.name,grade:student.grade,className:student.className,schoolYear:student.schoolYear,status:student.status,updatedAt:serverTimestamp(),
+    name:student.name,grade:student.grade,number:student.number??null,className:student.className,schoolYear:student.schoolYear,status:student.status,updatedAt:serverTimestamp(),
   });
 }
 export async function updateIncomeTaxRate(db:Firestore,context:SchoolContext,rateBp:number){

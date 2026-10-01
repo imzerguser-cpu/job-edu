@@ -37,7 +37,11 @@ describe('시트로 명단·계정 만들기',()=>{
     expect(update.body.password).toBe(`${yy}0101`);
     const commit=calls.find(c=>c.url.endsWith(':commit'))!;
     const paths=commit.body.writes.map((w:any)=>w.update.name.split('/documents/')[1]);
-    expect(paths.filter((p:string)=>p.includes('/students/'))).toHaveLength(1); // 기존 학생은 명단 문서를 다시 만들지 않는다
+    // 기존 학생은 명단 문서를 다시 만들지 않고 번호만 채운다(D-116)
+    const studentWrites=commit.body.writes.filter((w:any)=>w.update.name.includes('/students/'));
+    expect(studentWrites).toHaveLength(2);
+    expect(studentWrites.find((w:any)=>w.update.name.endsWith('/students/s1'))).toMatchObject({updateMask:{fieldPaths:['number']},update:{fields:{number:{integerValue:'1'}}}});
+    expect(studentWrites.find((w:any)=>!w.update.name.endsWith('/students/s1')).update.fields.number).toEqual({integerValue:'1'});
     expect(paths.filter((p:string)=>p.includes('/members/'))).toHaveLength(2);
     expect(paths.filter((p:string)=>p.startsWith('userSchools/'))).toHaveLength(2);
   });

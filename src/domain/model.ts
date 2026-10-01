@@ -2,7 +2,13 @@ export type Role = 'student' | 'teacher' | 'owner';
 export interface School { schoolId:string; schoolName:string; communityName:string; currencyName:string; currencySymbol:string; timezone:string; status:'active'|'inactive'; schemaVersion:1; incomeTaxRateBp:number; businessTaxRateBp:number; departmentNames:Partial<Record<'economy'|'media'|'life'|'culture',string>> }
 export interface Membership { schoolId:string; role:Role; studentId:string|null; status:'active'|'inactive' }
 export interface SchoolContext { schoolId:string; uid:string; membership:Membership }
-export interface Student { id:string; schoolId:string; name:string; grade:number; className:string|null; citizenCode:string; schoolYear:number; status:'active'|'graduated'|'transferred'; schemaVersion:1 }
+// number: 학년 안에서의 번호(출석번호). 이 필드가 생기기 전 학생은 없을 수 있다(D-116).
+export interface Student { id:string; schoolId:string; name:string; grade:number; number?:number|null; className:string|null; citizenCode:string; schoolYear:number; status:'active'|'graduated'|'transferred'; schemaVersion:1 }
+// 학년순 → 학년 안에서 번호순(번호 없는 학생은 뒤로) → 이름순.
+export function compareByGradeNumber(a:Pick<Student,'grade'|'number'|'name'>,b:Pick<Student,'grade'|'number'|'name'>){
+  return a.grade-b.grade||(a.number??999)-(b.number??999)||a.name.localeCompare(b.name,'ko');
+}
+export function studentLabel(s:Pick<Student,'grade'|'number'|'name'>){return `${s.grade}학년 ${s.number?`${s.number}번 `:''}${s.name}`}
 export type JobStatus='preparing'|'recruiting'|'active'|'paused'|'closed';
 export type VerificationKind='system'|'photo'|'artifact';
 export interface Job { id:string; schoolId:string; departmentId:string; name:string; core:boolean; status:JobStatus; recommendedGrades:number[] }

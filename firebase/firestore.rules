@@ -22,7 +22,9 @@ service cloud.firestore {
     function studentShape(sid) {
       let d = request.resource.data;
       return d.keys().hasAll(['schoolId','name','grade','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
-        && d.keys().hasOnly(['schoolId','name','grade','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
+        && d.keys().hasOnly(['schoolId','name','grade','number','className','citizenCode','schoolYear','status','schemaVersion','createdAt','updatedAt'])
+        // 학년 안 번호(D-116) — 예전 학생은 없을 수 있다.
+        && (d.get('number',null)==null || (d.get('number',null) is int && d.get('number',null)>=1 && d.get('number',null)<=99))
         && d.schoolId == sid && d.schemaVersion == 1
         && d.name is string && d.name.size() > 0 && d.name.size() <= 40
         && d.grade is int && d.grade >= 1 && d.grade <= 6
@@ -75,7 +77,7 @@ service cloud.firestore {
         allow create: if teacher(sid) && studentShape(sid)
           && request.resource.data.createdAt == request.time && request.resource.data.status == 'active';
         allow update: if teacher(sid) && studentShape(sid)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','grade','className','schoolYear','status','updatedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','grade','number','className','schoolYear','status','updatedAt']);
         allow delete: if false;
       }
       match /importBatches/{batchId} {

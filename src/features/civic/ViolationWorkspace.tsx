@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {formatMoney} from '../../domain/money';
 import {violationStatusNames,type ViolationReport} from '../../domain/violations';
-import type {Student} from '../../domain/model';
+import {compareByGradeNumber,studentLabel,type Student} from '../../domain/model';
 import type {ViolationStore} from '../../data/violationRepository';
 
 export function ViolationWorkspace({store,teacher,students,studentId,currencySymbol='마동'}:{store:ViolationStore;teacher:boolean;students:Student[];studentId?:string;currencySymbol?:string}){
@@ -31,7 +31,7 @@ function StudentViolations({store,students,studentId}:{store:ViolationStore;stud
     <div className="section-heading"><h2>규칙 위반 신고</h2></div>
     {error&&<p role="alert" className="error">{error}</p>}{message&&<p role="status" className="success">{message}</p>}
     <form className="assignment-form" onSubmit={submit}>
-      <label>대상 시민<select value={targetId} onChange={e=>setTargetId(e.target.value)} required><option value="">선택</option>{students.filter(s=>s.status==='active'&&s.id!==studentId).map(s=><option key={s.id} value={s.id}>{s.name} · {s.grade}학년</option>)}</select></label>
+      <label>대상 시민<select value={targetId} onChange={e=>setTargetId(e.target.value)} required><option value="">선택</option>{students.filter(s=>s.status==='active'&&s.id!==studentId).sort(compareByGradeNumber).map(s=><option key={s.id} value={s.id}>{studentLabel(s)}</option>)}</select></label>
       <label>무슨 일이 있었나요<textarea maxLength={500} value={description} onChange={e=>setDescription(e.target.value)} required/></label>
       <button className="button primary" disabled={busy||!targetId}>신고하기</button>
     </form>

@@ -158,7 +158,8 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
         if(!res.ok)throw new Error(data.error??'학생 정보를 바꾸지 못했습니다.');
         setEditResult(`${grade}학년 ${name} 학생 정보를 저장했습니다.${password?` 새 비밀번호: ${password}`:''}${data.hasAccount===false?' (아직 로그인 계정이 없는 학생입니다)':''}`);
       }
-      await updateStudent(firebase!.db,context,{...editingStudent,name,grade,className:String(f.get('className')||'').trim()||null,status:f.get('status') as Student['status']});
+      const numberRaw=String(f.get('number')||'').trim();
+      await updateStudent(firebase!.db,context,{...editingStudent,name,grade,number:numberRaw?Number(numberRaw):null,className:String(f.get('className')||'').trim()||null,status:f.get('status') as Student['status']});
       setEditingStudent(null);setRefresh(n=>n+1);
     }catch(e){setError(readableError(e))}
     finally{setSavingStudent(false)}
@@ -213,6 +214,7 @@ function SchoolWorkspace({context,school}:{context:SchoolContext;school:School})
     {editingStudent&&<form className="panel section action-form" onSubmit={saveStudent}>
       <h3>{editingStudent.name} 정보 수정</h3>
       <div className="fields"><label>이름<input name="name" defaultValue={editingStudent.name} required maxLength={40}/></label><label>새 비밀번호(숫자 4자리 또는 6자 이상, 바꿀 때만)<input name="newPassword" inputMode="numeric" pattern="[0-9]{4}|.{6,}" maxLength={40} placeholder="비워두면 그대로"/></label></div>
+      <div className="fields"><label>번호(학년 안 출석번호)<input name="number" type="number" min={1} max={99} defaultValue={editingStudent.number??''} placeholder="예: 3"/></label></div>
       <div className="fields"><label>학년<select name="grade" defaultValue={editingStudent.grade}>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label><label>반<input name="className" defaultValue={editingStudent.className??''} maxLength={20}/></label></div>
       <label>학적 상태<select name="status" defaultValue={editingStudent.status}><option value="active">활동 중</option><option value="graduated">졸업</option><option value="transferred">전출</option></select></label>
       <p className="muted">학년이나 이름을 바꾸면 학생의 로그인 아이디(학년·이름)도 함께 바뀝니다. 졸업·전출으로 바꿔도 기록은 보존됩니다.</p>
