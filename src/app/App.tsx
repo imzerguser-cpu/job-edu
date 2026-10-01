@@ -50,7 +50,11 @@ export function App(){
     if(!firebase)return;const client=firebase;
     return onAuthStateChanged(client.auth,async next=>{
       const token=++generation.current;setUser(next);setActive(null);setLinks([]);setError('');setLoading(!!next);
-      if(next){try{const schools=await listSchools(client.db,next.uid);if(token===generation.current)setLinks(schools)}catch(e){if(token===generation.current)setError(readableError(e))}}
+      if(next){try{
+        const schools=await listSchools(client.db,next.uid);if(token===generation.current)setLinks(schools);
+        // 연결된 학교가 하나뿐이면 학교 선택 화면 없이 바로 들어간다(D-114).
+        if(schools.length===1&&token===generation.current){const a=await openSchool(client.db,next.uid,schools[0].schoolId);if(token===generation.current)setActive(a)}
+      }catch(e){if(token===generation.current)setError(readableError(e))}}
       if(token===generation.current)setLoading(false);
     });
   },[]);
@@ -62,13 +66,21 @@ export function App(){
   async function logout(){if(!firebase)return;generation.current++;setActive(null);setLinks([]);setUser(null);try{await signOut(firebase.auth)}catch(e){setError(readableError(e))}}
   if(demo)return <Demo onExit={()=>setDemo(false)}/>;
   if(!firebase)return <Setup onDemo={()=>setDemo(true)}/>;
-  return <div className="shell"><header className="header"><a className="brand" href="/" aria-label="작은 사회 처음으로"><span className="brand-mark">M</span><span>{active?.school.communityName??'작은 사회'}</span></a><div className="header-actions">{active&&<button className="button quiet" onClick={()=>{generation.current++;setActive(null)}}>학교 변경</button>}{user&&<button className="button quiet" onClick={logout}>로그아웃</button>}</div></header>
+  return <div className="shell"><header className="header"><a className="brand" href="/" aria-label="작은 사회 처음으로"><span className="brand-mark">M</span><span>{active?.school.communityName??'작은 사회'}</span></a><div className="header-actions">{active&&links.length>1&&<button className="button quiet" onClick={()=>{generation.current++;setActive(null)}}>학교 변경</button>}{user&&<button className="button quiet" onClick={logout}>로그아웃</button>}</div></header>
     <main>{error&&<p role="alert" className="error">{error}</p>}{loading?<section className="panel"><p role="status">학교 정보를 확인하고 있어요.</p></section>:!user?<><Login onError={setError}/><div className="demo-entry"><button className="button secondary" onClick={()=>setDemo(true)}>가상 시민으로 직업 체험하기</button><p className="muted">실제 학생 정보 없이 신청과 배정을 확인해요.</p></div></>:!active?<section className="panel narrow"><span className="eyebrow">학교 선택</span><h1>나의 작은 사회로</h1><p>등록된 학교를 선택해 주세요.</p>{links.length?links.map(l=><button className="school-choice" key={l.schoolId} onClick={()=>selectSchool(l.schoolId)}>{l.schoolName}<span aria-hidden="true">→</span></button>):<div className="notice">연결된 학교가 없습니다. 학교 관리자에게 계정 등록을 요청해 주세요.</div>}</section>:<SchoolWorkspace key={`${user.uid}/${active.context.schoolId}`} {...active}/>}</main></div>;
 }
 function Login({onError}:{onError:(s:string)=>void}){
   const [busy,setBusy]=useState(false);
   const [mode,setMode]=useState<'student'|'teacher'>('student');
-  const defaultSchoolCode=useMemo(()=>new URLSearchParams(window.location.search).get('school')??'',[]);
+  const urlSchoolCode=useMemo(()=>new URLSearchParams(window.location.search).get('school')??'',[]);
+  // 주소에 ?school=이 없으면, 학교가 하나뿐인 사이트인지 관리 서버에 물어 학교 코드 칸을 숨긴다(D-114).
+  const [autoSchoolCode,setAutoSchoolCode]=useState<string|null|undefined>(urlSchoolCode?null:undefined);
+  useEffect(()=>{
+    if(urlSchoolCode)return;let alive=true;
+    fetch(ADMIN_WORKER_URL).then(r=>r.json() as Promise<{code?:string|null}>).then(d=>{if(alive)setAutoSchoolCode(d.code||null)}).catch(()=>{if(alive)setAutoSchoolCode(null)});
+    return ()=>{alive=false};
+  },[urlSchoolCode]);
+  const schoolCode=urlSchoolCode||autoSchoolCode||'';
   async function submit(e:FormEvent<HTMLFormElement>){
     e.preventDefault();if(!firebase)return;setBusy(true);onError('');const f=new FormData(e.currentTarget);
     try{
@@ -87,8 +99,10 @@ function Login({onError}:{onError:(s:string)=>void}){
         <button type="button" className={mode==='teacher'?'tab active':'tab'} aria-pressed={mode==='teacher'} onClick={()=>setMode('teacher')}>선생님</button>
       </div>
       {mode==='student'
-        ?<><h2>학생 로그인</h2><p>선생님께 안내받은 학교 코드와 비밀번호로 로그인해요. 이메일은 필요 없어요.</p>
-          <label>학교 코드<input name="schoolCode" defaultValue={defaultSchoolCode} autoComplete="off" required maxLength={40} placeholder="예: 마동초 또는 마동초등학교"/></label>
+        ?<><h2>학생 로그인</h2><p>{schoolCode?'내 학년과 이름, 비밀번호로 로그인해요.':'선생님께 안내받은 학교 코드와 비밀번호로 로그인해요. 이메일은 필요 없어요.'}</p>
+          {schoolCode?<input type="hidden" name="schoolCode" value={schoolCode}/>
+            :autoSchoolCode===undefined?<p className="muted" role="status">학교 정보를 확인하고 있어요…</p>
+            :<label>학교 코드<input name="schoolCode" autoComplete="off" required maxLength={40} placeholder="예: 마동초 또는 마동초등학교"/></label>}
           <label>학년<select name="grade" defaultValue="" required><option value="" disabled>학년 선택</option>{[1,2,3,4,5,6].map(g=><option key={g} value={g}>{g}학년</option>)}</select></label>
           <label>이름<input name="name" autoComplete="username" required maxLength={40}/></label></>
         :<><h2>선생님 로그인</h2><p>학교에서 안내받은 계정을 사용해 주세요.</p>

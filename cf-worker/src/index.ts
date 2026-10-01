@@ -21,6 +21,8 @@ export interface Env {
   GOOGLE_PRIVATE_KEY_B64:string;
   FIREBASE_PROJECT_ID:string;
   ALLOWED_ORIGIN:string;
+  // 학생 로그인 화면이 학교 코드를 묻지 않도록 기본으로 쓸 학교(D-114). 비우면 운영 중인 학교가 하나일 때만 자동.
+  DEFAULT_SCHOOL_ID?:string;
 }
 
 const firebaseJwks=createRemoteJWKSet(new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'));
@@ -31,7 +33,7 @@ const firebaseJwks=createRemoteJWKSet(new URL('https://www.googleapis.com/servic
 class UserInputError extends Error {}
 
 function corsHeaders(origin:string):Record<string,string>{
-  return {'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type','Vary':'Origin'};
+  return {'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Authorization, Content-Type','Vary':'Origin'};
 }
 function json(data:unknown,status:number,origin:string){
   return new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json',...corsHeaders(origin)}});
@@ -394,6 +396,24 @@ export default {
   async fetch(request:Request,env:Env):Promise<Response>{
     const origin=env.ALLOWED_ORIGIN;
     if(request.method==='OPTIONS')return new Response(null,{headers:corsHeaders(origin)});
+    // 로그인 전 공개 조회(D-114): 이 프로젝트에 운영 중인 학교가 딱 하나면 그 학교 코드를 알려 준다 —
+    // 학생이 로그인 화면에서 학교 코드를 입력하지 않아도 되게. 학교 이름은 비밀 정보가 아니고,
+    // 학생 명단·계정 정보는 아무것도 돌려주지 않는다. 학교가 여럿이면 code:null(학생이 직접 입력).
+    if(request.method==='GET'){
+      try{
+        const accessToken=await googleAccessToken(env,'https://www.googleapis.com/auth/datastore');
+        let code:string|null=null;
+        if(env.DEFAULT_SCHOOL_ID){code=canonicalSchoolCode(await schoolName(env,accessToken,env.DEFAULT_SCHOOL_ID))}
+        else{
+          const res=await fetch(`${FS(env)}/schools?pageSize=10`,{headers:{Authorization:`Bearer ${accessToken}`}});
+          if(!res.ok)throw new Error('학교 정보를 불러오지 못했습니다.');
+          const data=await res.json() as {documents?:{fields?:Record<string,FsValue>}[]};
+          const active=(data.documents??[]).filter(d=>(d.fields?.status?.stringValue??'active')==='active'&&d.fields?.schoolName?.stringValue);
+          code=active.length===1?canonicalSchoolCode(active[0].fields!.schoolName!.stringValue!):null;
+        }
+        return new Response(JSON.stringify({code}),{status:200,headers:{'Content-Type':'application/json','Cache-Control':'public, max-age=300',...corsHeaders(origin)}});
+      }catch{return json({code:null},200,origin)}
+    }
     if(request.method!=='POST')return json({error:'허용되지 않은 요청입니다.'},405,origin);
     try{
       const idToken=(request.headers.get('Authorization')??'').replace(/^Bearer\s+/i,'');

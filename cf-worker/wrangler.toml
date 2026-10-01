@@ -5,3 +5,5 @@ compatibility_date = "2026-09-01"
 [vars]
 FIREBASE_PROJECT_ID = "jobedu-5c8fb"
 ALLOWED_ORIGIN = "https://jobedu-5c8fb.web.app"
+# 학생 로그인에서 학교 코드 입력을 생략할 기본 학교(마동초등학교)
+DEFAULT_SCHOOL_ID = "jobedu-5c8fb"
