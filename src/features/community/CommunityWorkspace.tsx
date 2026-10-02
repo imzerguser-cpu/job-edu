@@ -95,7 +95,7 @@ export function PraiseTree({store,students,studentId}:{store:CommunityStore;stud
 export function ClassGoalsBanner({store}:{store:CommunityStore}){
   const [goals,setGoals]=useState<ClassGoal[]>([]);
   useEffect(()=>{store.listGoals().then(g=>setGoals(g.filter(x=>x.status!=='archived'))).catch(()=>setGoals([]))},[store]);
-  if(!goals.length)return null;
+  if(!goals.length)return <p role="status">아직 표시할 공동 목표가 없어요.</p>;
   return <section className="goal-banner" aria-label="우리 반 공동 목표">
     <h2>🏁 우리 반 공동 목표</h2>
     <div className="goal-list">{goals.map(g=><div key={g.id} className={`goal-item${g.status==='achieved'?' achieved':''}`}>

@@ -397,7 +397,8 @@ service cloud.firestore {
       // that journal type: teacher for SALARY (settlement), the buyer themself for PURCHASE
       // (instant, fully rule-validated self-service — see purchaseJournalShape below).
       function journalActorOk(j) {
-        return (j.type=='SALARY' && teacher(sid))
+        return (j.type=='AVATAR_PURCHASE' && j.createdAt==request.time && activeStudent(sid) && callerStudentId(sid)==j.studentId)
+          || (j.type=='SALARY' && teacher(sid))
           || (j.type=='PURCHASE' && activeStudent(sid) && callerStudentId(sid)==j.buyerStudentId)
           || (j.type=='SAVINGS_DEPOSIT' && activeStudent(sid) && callerStudentId(sid)==j.studentId)
           || (j.type=='INTEREST' && teacher(sid))
@@ -484,7 +485,7 @@ service cloud.firestore {
           allow list: if bounded() && (teacher(sid) || ownStudent(sid,accountId) || ownBusiness(accountId));
           allow create: if request.resource.data.keys().hasAll(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
             && request.resource.data.keys().hasOnly(['schoolId','journalId','type','deltaMinor','balanceAfterMinor','label','postedAt'])
-            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE','FUND_EXPENSE','TASK_REWARD','HELP_ESCROW','HELP_REFUND','HELP_REWARD']
+            && request.resource.data.schoolId==sid && request.resource.data.journalId==entryId && request.resource.data.type in ['AVATAR_PURCHASE','SALARY','PURCHASE','SAVINGS_DEPOSIT','INTEREST','LOAN','LOAN_REPAYMENT','INCOME_TAX','BUSINESS_TAX','FINE','FUND_EXPENSE','TASK_REWARD','HELP_ESCROW','HELP_REFUND','HELP_REWARD']
             && request.resource.data.label is string && request.resource.data.label.size()<=60
             && request.resource.data.postedAt==request.time
             && request.resource.data.balanceAfterMinor==getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(accountId)).data.balanceMinor
@@ -755,6 +756,81 @@ service cloud.firestore {
           && d.amountMinor is int && d.amountMinor>0 && d.amountMinor<=100000
           && d.postedBy==request.auth.uid && d.createdAt==request.time;
       }
+      // Built-in fashion catalogue. Prices match src/domain/avatar.ts (minor units).
+      function fashionPrice(id) {
+        return {'hoodie':1500,'overalls':2000,'dress':2000,'jacket':2500,'sneakers':1000,'boots':1500,'rainboots':1200,'glasses':800,'cap':1000,'bow':800,'headphones':1800,'sailor':2200,'tracksuit':1800,'raincoat':2300,'hanbok':2800,'spacesuit':3200,'chef':2400,'knit':1900,'flowerdress':2400,'hightops':1400,'loafers':1300,'sandals':900,'ballet':1300,'spaceboots':1800,'skates':2200,'twintails':1200,'braids':1400,'spacebuns':1500,'wavy':1600,'pixie':1100,'bowl':1000,'sidebraid':1500,'afro':1600,'mohawk':1700,'halfup':1300,'squareglasses':900,'catglasses':1200,'roundshades':1400,'sportshades':1600,'starshades':1700,'beanie':1200,'beret':1400,'bucket':1300,'crown':2200,'catband':1300,'flowerband':1500,'scrunchie':1000,'ribbontie':1100,'starclip':800}.get(id,0);
+      }
+      function avatarItemPath(studentId,itemId) { return /databases/$(database)/documents/schools/$(sid)/avatars/$(studentId)/items/$(itemId); }
+      function avatarShape(studentId) {
+        let d=request.resource.data;
+        let a=d.appearance;
+        return d.keys().hasAll(['schoolId','studentId','appearance','schemaVersion','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','appearance','schemaVersion','updatedAt'])
+          && d.schoolId==sid && d.studentId==studentId && d.schemaVersion==1 && d.updatedAt==request.time
+          && a.keys().hasAll(['skin','face','eyes','nose','mouth','hair','hairColor','outfit','shoes','accessory','eyewear','headwear'])
+          && a.keys().hasOnly(['skin','face','eyes','nose','mouth','hair','hairColor','outfit','shoes','accessory','eyewear','headwear'])
+          && a.skin in ['peach','sand','gold','brown','deep','rose']
+          && a.face in ['round','oval','soft']
+          && a.eyes in ['bright','almond','smile','sparkle']
+          && a.nose in ['button','round','small']
+          && a.mouth in ['smile','grin','calm','wow']
+          && a.hair in ['short','bob','long','curly','ponytail','spiky','twintails','braids','spacebuns','wavy','pixie','bowl','sidebraid','afro','mohawk','halfup']
+          && a.hairColor in ['black','brown','chestnut','blond','purple']
+          && a.outfit in ['tee','hoodie','overalls','dress','jacket','sailor','tracksuit','raincoat','hanbok','spacesuit','chef','knit','flowerdress']
+          && a.shoes in ['basic','sneakers','boots','rainboots','hightops','loafers','sandals','ballet','spaceboots','skates']
+          && a.accessory in ['none','bow','headphones','scrunchie','ribbontie','starclip']
+          && a.eyewear in ['none','glasses','squareglasses','catglasses','roundshades','sportshades','starshades']
+          && a.headwear in ['none','cap','beanie','beret','bucket','crown','catband','flowerband']
+          && (a.outfit in ['tee'] || exists(avatarItemPath(studentId,a.outfit)))
+          && (a.shoes in ['basic'] || exists(avatarItemPath(studentId,a.shoes)))
+          && (a.accessory in ['none'] || exists(avatarItemPath(studentId,a.accessory)))
+          && (a.eyewear in ['none'] || exists(avatarItemPath(studentId,a.eyewear)))
+          && (a.headwear in ['none'] || exists(avatarItemPath(studentId,a.headwear)))
+          && (a.hair in ['short','bob','long','curly','ponytail','spiky'] || exists(avatarItemPath(studentId,a.hair)));
+      }
+      function avatarPayment(studentId,itemId,journalId) {
+        let j=getAfter(journalPath(journalId)).data;
+        let buyer=getAfter(accountPath(studentId)).data;
+        let issuer=getAfter(accountPath('system-issuer')).data;
+        return j.type=='AVATAR_PURCHASE' && j.studentId==studentId && j.itemId==itemId
+          && j.amountMinor==fashionPrice(itemId) && fashionPrice(itemId)>0
+          && buyer.lastJournalId==journalId && issuer.lastJournalId==journalId
+          && buyer.balanceMinor==get(accountPath(studentId)).data.balanceMinor-j.amountMinor
+          && issuer.balanceMinor==get(accountPath('system-issuer')).data.balanceMinor+j.amountMinor
+          && getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/$(studentId)/entries/$(journalId)).data.deltaMinor==-j.amountMinor
+          && getAfter(/databases/$(database)/documents/schools/$(sid)/accounts/system-issuer/entries/$(journalId)).data.deltaMinor==j.amountMinor;
+      }
+      match /avatars/{studentId} {
+        allow get: if teacher(sid) || ownStudent(sid,studentId);
+        allow create, update: if ownStudent(sid,studentId) && avatarShape(studentId);
+        allow delete, list: if false;
+        match /items/{itemId} {
+          allow get: if teacher(sid) || ownStudent(sid,studentId);
+          allow list: if bounded() && (teacher(sid) || ownStudent(sid,studentId));
+          allow create: if ownStudent(sid,studentId)
+            && request.resource.data.keys().hasAll(['schoolId','studentId','itemId','journalId','createdAt'])
+            && request.resource.data.keys().hasOnly(['schoolId','studentId','itemId','journalId','createdAt'])
+            && request.resource.data.schoolId==sid && request.resource.data.studentId==studentId && request.resource.data.itemId==itemId
+            && request.resource.data.createdAt==request.time
+            && request.resource.data.journalId==('avatar~'+studentId+'~'+itemId)
+            && !exists(journalPath(request.resource.data.journalId))
+            && avatarPayment(studentId,itemId,request.resource.data.journalId);
+          allow update, delete: if false;
+        }
+      }
+      function avatarJournalShape(journalId) {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','type','studentId','itemId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.keys().hasOnly(['schoolId','type','studentId','itemId','debitAccountId','creditAccountId','amountMinor','postedBy','schemaVersion','createdAt'])
+          && d.schoolId==sid && d.schemaVersion==1 && d.createdAt==request.time
+          && d.studentId==callerStudentId(sid) && d.postedBy==d.studentId
+          && d.debitAccountId==d.studentId && d.creditAccountId=='system-issuer'
+          && d.amountMinor is int && d.amountMinor==fashionPrice(d.itemId) && d.amountMinor>0
+          && journalId==('avatar~'+d.studentId+'~'+d.itemId)
+          && !exists(avatarItemPath(d.studentId,d.itemId))
+          && getAfter(avatarItemPath(d.studentId,d.itemId)).data.journalId==journalId;
+      }
+
       match /journals/{journalId} {
         allow get: if teacher(sid);
         allow list: if teacher(sid) && bounded();
@@ -782,6 +858,8 @@ service cloud.firestore {
         let isActiveStudent = activeStudent(sid);
         let myStudentId = isActiveStudent ? callerStudentId(sid) : null;
         return
+          (d.type=='AVATAR_PURCHASE' && isActiveStudent && avatarJournalShape(journalId))
+          ||
           (d.type=='SALARY' && isTeacher && salaryJournalShape()
             && journalId==('salary~'+d.jobId+'~'+d.studentId+'~'+d.period)
             && get(jobPath(d.jobId)).data.salaryMinor==d.amountMinor

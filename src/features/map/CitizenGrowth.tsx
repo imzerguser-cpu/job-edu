@@ -1,3 +1,5 @@
+import {Avatar} from '../avatar/Avatar';
+import type {AvatarAppearance} from '../../domain/avatar';
 import {useState} from 'react';
 import {achievements,levelInfo,quests,totalXp,xpBreakdown,type GrowthStats} from '../../domain/growth';
 import type {Student} from '../../domain/model';
@@ -23,11 +25,11 @@ function levelKey(studentId:string){return `jobedu-level-seen-${studentId}`}
 export function lastSeenLevel(studentId:string){try{const n=Number(localStorage.getItem(levelKey(studentId)));return Number.isInteger(n)&&n>0?n:null}catch{return null}}
 export function markLevelSeen(studentId:string,level:number){try{localStorage.setItem(levelKey(studentId),String(level))}catch{/* 다음에 다시 축하해도 괜찮다 */}}
 
-export function CharacterHud({citizen,community,character,stats,jobCount,onGuide,onGrowth,onPickCharacter,onDiscover}:{citizen:Student;community:string;character:CharacterId;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void;onDiscover:()=>void}){
+export function CharacterHud({avatar,citizen,community,character,stats,jobCount,onGuide,onGrowth,onPickCharacter,onDiscover}:{avatar?:AvatarAppearance;citizen:Student;community:string;character:CharacterId;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void;onDiscover:()=>void}){
   const info=stats?levelInfo(totalXp(stats)):null;
   return <aside className="citizen-hud game-hud">
     <button type="button" className="hud-avatar" onClick={onPickCharacter} aria-label="내 캐릭터 바꾸기">
-      <img src={characterSrc(character)} alt=""/>
+      {avatar?<Avatar appearance={avatar}/>:<img src={characterSrc(character)} alt=""/>}
       <span className="hud-level">{info?`Lv.${info.level}`:'Lv.?'}</span>
     </button>
     <div className="hud-main">
@@ -51,7 +53,7 @@ export function CharacterHud({citizen,community,character,stats,jobCount,onGuide
 }
 
 export function QuestBoard({stats,onGo}:{stats:GrowthStats|null;onGo:(id:BuildingId,tab?:string)=>void}){
-  if(!stats)return null;
+  if(!stats)return <p role="status">모험을 불러오고 있어요.</p>;
   const list=quests(stats);
   const place=(id:BuildingId)=>buildings.find(b=>b.id===id)?.label??'';
   return <section className="quest-board" aria-label="지금 할 수 있는 모험">

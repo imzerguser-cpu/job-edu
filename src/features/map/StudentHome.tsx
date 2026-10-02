@@ -1,4 +1,8 @@
-import {useCallback,useEffect,useState,type ReactNode} from 'react';
+import {firestoreAvatar} from '../../data/avatarRepository';
+import {AvatarStudio} from '../avatar/AvatarStudio';
+import {Avatar} from '../avatar/Avatar';
+import {defaultAvatar,type AvatarAppearance} from '../../domain/avatar';
+import {useCallback,useEffect,useMemo,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
 import {listActiveStudents} from '../../data/schoolRepository';
 import {firebase} from '../../data/firebase';
@@ -23,12 +27,13 @@ import {BankWorkspace} from '../finance/BankWorkspace';
 import {StoreWorkspace} from '../business/StoreWorkspace';
 import {CivicWorkspace} from '../civic/CivicWorkspace';
 import {ViolationWorkspace} from '../civic/ViolationWorkspace';
-import {CitizenMap} from './CitizenMap';
+import {DestinationMenu} from './CitizenMap';
+import {StudentMapLayout,type MapPanel} from './StudentMapLayout';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {GameWindow,type GameTab} from './GameWindow';
-import {CharacterHud,CharacterPicker,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,loadCharacter,markLevelSeen,saveCharacter,type CharacterId} from './CitizenGrowth';
+import {CharacterHud,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,loadCharacter,markLevelSeen} from './CitizenGrowth';
 import {loadGrowthStats} from './growthStats';
-import {levelInfo,totalXp,type GrowthStats} from '../../domain/growth';
+import {levelInfo,totalXp,quests,type GrowthStats} from '../../domain/growth';
 import {GuideWorkspace} from './GuideWorkspace';
 import {buildings,type BuildingId} from './buildings';
 
@@ -42,13 +47,17 @@ function markGuideSeen(studentId:string){try{localStorage.setItem(guideSeenKey(s
 
 export function StudentHome({citizen,school,context,store,taskStore,financeStore,savingsStore,loanStore,productStore,businessStore,proposalStore,violationStore,communityStore,careerProfileStore}:{citizen:Student;school:School;context:SchoolContext;store:CareerStore;taskStore:TaskStore;financeStore:FinanceStore;savingsStore:SavingsStore;loanStore:LoanStore;productStore:FinancialProductStore;businessStore:BusinessStore;proposalStore:ProposalStore;violationStore:ViolationStore;communityStore:CommunityStore;careerProfileStore:CareerProfileStore}){
   // 'growth'/'character'는 건물이 아니라 HUD에서 여는 창이다.
-  const [view,setView]=useState<'map'|BuildingId|'guide'|'growth'|'character'>(()=>hasSeenGuide(citizen.id)?'map':'guide');
+  const [view,setView]=useState<'map'|BuildingId|MapPanel|'growth'|'character'>(()=>hasSeenGuide(citizen.id)?'map':'guide');
   // 퀘스트나 추천 직업에서 건물로 보낼 때 어느 탭을 먼저 열지.
   const [tab,setTab]=useState<string|undefined>(undefined);
   const [roster,setRoster]=useState<Student[]>([citizen]);
   const [stats,setStats]=useState<GrowthStats|null>(null);
   const [refresh,setRefresh]=useState(0);
-  const [character,setCharacter]=useState<CharacterId>(()=>loadCharacter(citizen.id));
+  const character=loadCharacter(citizen.id);
+  const avatarStore=useMemo(()=>firebase?firestoreAvatar(firebase.db,context):null,[context]);
+  const [avatar,setAvatar]=useState<AvatarAppearance>({...defaultAvatar});
+  useEffect(()=>{let alive=true;setAvatar({...defaultAvatar});avatarStore?.load().then(d=>{if(alive)setAvatar(d.appearance)}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
+  const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} onSaved={setAvatar} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
   const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
   useEffect(()=>{
     let alive=true;
@@ -73,7 +82,6 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   // 창 안에서 다른 건물로 바로 이동(추천 직업 "만나러 가기", 창업 센터 단계 버튼 등).
   const go=useCallback((id:BuildingId,nextTab?:string)=>{setView(id);setTab(nextTab);setRefresh(n=>n+1)},[]);
 
-  if(view==='guide')return <GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>;
 
   const studentId=context.membership.studentId??undefined;
   const work=(icons:string[])=>[
@@ -82,14 +90,20 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   ] satisfies GameTab[];
 
   let win:ReactNode=null;
-  if(view==='growth')win=<GameWindow title="나의 성장 기록" subtitle="레벨·업적·경험치를 확인해요" tabs={[{id:'growth',icon:'🏅',label:'성장 기록',content:<GrowthPanel stats={stats}/>}]} onClose={closeWindow}/>;
-  else if(view==='character')win=<GameWindow title="내 캐릭터" subtitle="마을에서 나를 보여 줄 캐릭터를 골라요" tabs={[{id:'pick',icon:'🧑',label:'캐릭터',content:<CharacterPicker current={character} onPick={id=>{setCharacter(id);saveCharacter(citizen.id,id)}} onClose={()=>setView('map')}/>}]} onClose={()=>setView('map')}/>;
+  if(view==='guide')win=<GameWindow title="사용 안내서" subtitle="지도에서 시작하는 우리 사회" tabs={[{id:'guide',icon:'❔',label:'안내서',content:<GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>}]} onClose={closeGuide}/>;
+  else if(view==='profile')win=<GameWindow title="내 정보" subtitle="캐릭터와 성장 기록을 확인해요" tabs={[{id:'profile',icon:'👤',label:'내 정보',content:<CharacterHud avatar={avatar} citizen={citizen} community={school.communityName} character={character} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>}]} onClose={closeWindow}/>;
+  else if(view==='quests')win=<GameWindow title="지금 할 수 있는 모험" subtitle="하고 싶은 모험을 누르면 해당 건물로 이동해요" tabs={[{id:'quests',icon:'🧭',label:'모험',content:<QuestBoard stats={stats} onGo={go}/>}]} onClose={closeWindow}/>;
+  else if(view==='goals')win=<GameWindow title="우리 반 공동 목표" subtitle="친구들과 함께 이루는 목표예요" tabs={[{id:'goals',icon:'🌱',label:'목표',content:<ClassGoalsBanner key={refresh} store={communityStore}/>}]} onClose={closeWindow}/>;
+  else if(view==='places')win=<GameWindow title="건물 목록" subtitle="가고 싶은 건물을 골라요" tabs={[{id:'places',icon:'🏘️',label:'건물',content:<DestinationMenu onNavigate={go}/>}]} onClose={closeWindow}/>;
+  else if(view==='growth')win=<GameWindow title="나의 성장 기록" subtitle="레벨·업적·경험치를 확인해요" tabs={[{id:'growth',icon:'🏅',label:'성장 기록',content:<GrowthPanel stats={stats}/>}]} onClose={closeWindow}/>;
+  else if(view==='character')win=<GameWindow title="내 캐릭터" subtitle="마을에서 나를 보여 줄 캐릭터를 골라요" tabs={[{id:'pick',icon:'🧑',label:'캐릭터',content:avatarStudio()}]} onClose={closeWindow}/>;
   else if(view!=='map'){
     const building=buildings.find(b=>b.id===view)!;
     const eyebrow=building.departmentId?departmentDisplayName(school,building.departmentId):undefined;
     // 은행·상점도 "쓰는 곳"이면서 동시에 "일하는 곳"이다 — 은행원·카페 직원·매점 관리원이
     // 자기 일터에서 업무를 찾을 수 있도록 일하기 탭을 함께 붙인다(이전엔 마이페이지에서만 보였음).
     const tabs:GameTab[]=view==='mypage'?[
+      {id:'avatar',icon:'🎨',label:'캐릭터 꾸미기',content:avatarStudio()},
       {id:'discover',icon:'🧭',label:'나를 찾기',content:<CareerDiscovery store={careerProfileStore} careerStore={store} citizen={citizen} onGo={go}/>},
       {id:'jobs',icon:'🪪',label:'내 직업',content:<CareerWorkspace store={store} schoolId={context.schoolId} teacher={false} students={[citizen]} studentId={studentId} departmentNames={school.departmentNames}/>},
       {id:'tasks',icon:'📋',label:'모든 업무',content:<TaskWorkspace taskStore={taskStore} careerStore={store} teacher={false} students={[citizen]} studentId={studentId} currencySymbol={school.currencyName}/>},
@@ -102,6 +116,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
       {id:'bank',icon:'🏦',label:'은행 창구',content:<BankWorkspace store={financeStore} savingsStore={savingsStore} loanStore={loanStore} productStore={productStore} teacher={false} currencySymbol={school.currencyName}/>},
       ...work(building.icons??[]),
     ]:view==='store'?[
+      {id:'fashion',icon:'👕',label:'패션 상점',content:avatarStudio(true)},
       {id:'shop',icon:'🛍️',label:'카페·매점 이용',content:<StoreWorkspace store={businessStore} teacher={false} students={[citizen]} currencySymbol={school.currencyName} studentId={citizen.id}/>},
       ...work(building.icons??[]),
       {id:'startup',icon:'🚀',label:'창업 센터',content:<StartupCenter studentId={citizen.id} proposalStore={proposalStore} loanStore={loanStore} businessStore={businessStore} currencySymbol={school.currencyName} onGo={go}/>},
@@ -110,12 +125,8 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
     win=<GameWindow key={view+'-'+(tab??'')} initialTab={tab} buildingId={building.id} title={building.label} subtitle={building.subtitle} eyebrow={eyebrow} tabs={tabs} onClose={closeWindow}/>;
   }
 
-  return <div className="citizen-shell">
-    <CharacterHud citizen={citizen} community={school.communityName} character={character} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>
+  return <StudentMapLayout avatar={<Avatar appearance={avatar} className="toolbar-avatar"/>} name={citizen.name} questCount={stats?quests(stats).length:null} onPanel={setView} onNavigate={go}>
     {levelUp&&<LevelUpToast level={levelUp.level} title={levelUp.title} onClose={()=>setLevelUp(null)}/>}
-    <ClassGoalsBanner key={refresh} store={communityStore}/>
-    <QuestBoard stats={stats} onGo={go}/>
-    <CitizenMap onNavigate={setView}/>
     {win}
-  </div>;
+  </StudentMapLayout>;
 }

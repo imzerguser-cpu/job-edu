@@ -54,7 +54,7 @@ export function firestoreFinance(db:Firestore,context:SchoolContext):FinanceStor
     },
     async myEntryCount(type){
       const studentId=assertApplicant(context);
-      const snap=await getDocsFromServer(query(collection(ref('accounts',studentId),'entries'),where('type','==',type),limit(100)));
+      const snap=await getDocsFromServer(query(collection(ref('accounts',studentId),'entries'),type==='PURCHASE'?where('type','in',['PURCHASE','AVATAR_PURCHASE']):where('type','==',type),limit(100)));
       // 구매는 음수(내가 낸 돈)만 센다 — 사업 계좌가 아니라 내 계좌이므로 사실상 전부 해당.
       return type==='PURCHASE'?snap.docs.filter(d=>(d.data().deltaMinor??0)<0).length:snap.size;
     },

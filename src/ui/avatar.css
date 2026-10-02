@@ -1,0 +1,24 @@
+.avatar-art{display:block;width:100%;height:100%;object-fit:contain}
+.avatar-studio{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:22px;align-items:start}
+.avatar-preview{position:sticky;top:0;background:linear-gradient(160deg,#edf7ed,#fff0df);border:1px solid #d9e6ce;border-radius:22px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px;text-align:center}
+.avatar-preview>.avatar-art{height:clamp(150px,29dvh,260px);max-width:200px}
+.avatar-preview .button{width:100%;min-height:44px}
+.avatar-preview p{margin:0;font-size:.8rem;line-height:1.5}
+.avatar-options{min-width:0}
+.avatar-options .section-heading{flex-wrap:wrap;gap:10px;margin-bottom:16px}
+.avatar-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.avatar-tabs button{min-height:44px;border:1px solid #d7d4e9;background:#fff;border-radius:12px;padding:8px 12px;color:#534474}
+.avatar-tabs button[aria-pressed=true]{background:#6c589d;color:white;border-color:#6c589d}
+.avatar-choices,.fashion-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:10px;margin-top:12px}
+.avatar-choices>button,.fashion-card{border:2px solid #e5e0ee;border-radius:16px;background:#fff;padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;color:#354252}
+.avatar-choices>button[aria-pressed=true]{border-color:#8160b6;background:#f4eeff}
+.avatar-choices .avatar-art,.fashion-card .avatar-art{height:145px;width:110px}
+.avatar-choices>button:disabled{opacity:.6}
+.fashion-card .button{width:100%;min-height:44px;padding:8px;font-size:.8rem}
+.fashion-card b{font-size:.9rem}
+.avatar-confirm{position:sticky;top:0;z-index:2;padding:16px;border:2px solid #d7b55e;border-radius:14px;background:#fff7dd;margin-bottom:16px;box-shadow:0 4px 12px #0001}
+.avatar-confirm p{margin:8px 0;font-size:.9rem}
+.avatar-confirm .header-actions{flex-wrap:wrap}
+.map-toolbar .toolbar-avatar{width:32px;height:42px;flex:none}
+.hud-avatar .avatar-art{width:100%;height:100%}
+@media(max-width:640px){.avatar-studio{grid-template-columns:1fr;gap:14px}.avatar-preview{position:static;display:grid;grid-template-columns:100px 1fr;text-align:left}.avatar-preview>.avatar-art{grid-row:1/5;height:145px;width:100px}.avatar-preview .button{grid-column:2}.avatar-preview p{grid-column:2}.avatar-choices,.fashion-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.avatar-confirm{position:static}}

@@ -10,24 +10,26 @@ export interface GameTab {id:string;icon:string;label:string;content:ReactNode}
 // 안 보는 탭까지 한꺼번에 서버를 부르지 않게 하기 위함.
 export function GameWindow({buildingId,title,subtitle,eyebrow,tabs,initialTab,onClose}:{buildingId?:BuildingId;title:string;subtitle:string;eyebrow?:string;tabs:GameTab[];initialTab?:string;onClose:()=>void}){
   const [active,setActive]=useState(()=>tabs.some(t=>t.id===initialTab)?initialTab!:tabs[0]?.id);
-  const dialog=useRef<HTMLDivElement>(null);
+  const dialog=useRef<HTMLDialogElement>(null);
   // onClose는 부모가 매번 새 함수로 넘겨도 되도록 ref로 보관한다 — effect가 다시 돌면
   // 입력 중인 칸에서 포커스를 창으로 빼앗아 버리기 때문.
   const closeRef=useRef(onClose);closeRef.current=onClose;
   useEffect(()=>{
     const previous=document.activeElement as HTMLElement|null;
-    dialog.current?.focus();
+    const modal=dialog.current;
+    modal?.showModal();
     const {overflow}=document.body.style;document.body.style.overflow='hidden';
     // 글을 쓰던 칸에서 Esc를 눌러 작성 중인 내용이 날아가지 않도록 입력 칸 밖에서만 닫는다.
-    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!(e.target instanceof HTMLElement&&e.target.closest('input,textarea,select')))closeRef.current()};
-    window.addEventListener('keydown',onKey);
-    return ()=>{window.removeEventListener('keydown',onKey);document.body.style.overflow=overflow;previous?.focus?.()};
+    return ()=>{modal?.close();document.body.style.overflow=overflow;if(previous?.isConnected)previous.focus({preventScroll:true})};
   },[]);
   const current=tabs.find(t=>t.id===active)??tabs[0];
   // 바깥(어두운 배경)을 눌러도 닫히지 않는다 — 태블릿에서 실수로 스쳐 작성 중인 제출물이
   // 사라지는 일을 막기 위해 닫기는 ✕ 버튼과 Esc로만.
-  return <div className="game-window-backdrop">
-    <div className="game-window" role="dialog" aria-modal="true" aria-labelledby="game-window-title" tabIndex={-1} ref={dialog}>
+  return <dialog className="game-window-backdrop" aria-labelledby="game-window-title" ref={dialog} onCancel={e=>{
+    e.preventDefault();
+    if(!(document.activeElement instanceof HTMLElement&&document.activeElement.closest('input,textarea,select')))closeRef.current();
+  }}>
+    <div className="game-window">
       <header className="game-window-bar">
         {buildingId&&<DestinationIcon className="game-window-icon" id={buildingId}/>}
         <div className="game-window-title">{eyebrow&&<span className="citizen-hud-eyebrow">{eyebrow}</span>}<h1 id="game-window-title">{title}</h1><p>{subtitle}</p></div>
@@ -38,5 +40,5 @@ export function GameWindow({buildingId,title,subtitle,eyebrow,tabs,initialTab,on
       </nav>}
       <div className="game-window-body" role="tabpanel">{current?.content}</div>
     </div>
-  </div>;
+  </dialog>;
 }
