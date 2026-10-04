@@ -8,5 +8,5 @@ export default defineConfig(({command,mode})=>{
     if(missing.length)throw new Error(`Cannot build without Firebase login configuration: ${missing.join(', ')}`);
     if(env.VITE_USE_EMULATORS==='true')throw new Error('Cannot publish a build configured for local Firebase emulators.');
   }
-  return {plugins:[react()],build:{sourcemap:false},server:{host:'127.0.0.1',port:5173,strictPort:true}};
+  return {plugins:[react()],build:{sourcemap:false,rollupOptions:{input:{main:'index.html',character:'character-preview.html'}}},server:{host:'127.0.0.1',port:5173,strictPort:true}};
 });
