@@ -758,14 +758,40 @@ service cloud.firestore {
       }
       // Built-in fashion catalogue. Prices match src/domain/avatar.ts (minor units).
       function fashionPrice(id) {
-        return {'hoodie':1500,'overalls':2000,'dress':2000,'jacket':2500,'sneakers':1000,'boots':1500,'rainboots':1200,'glasses':800,'cap':1000,'bow':800,'headphones':1800,'sailor':2200,'tracksuit':1800,'raincoat':2300,'hanbok':2800,'spacesuit':3200,'chef':2400,'knit':1900,'flowerdress':2400,'hightops':1400,'loafers':1300,'sandals':900,'ballet':1300,'spaceboots':1800,'skates':2200,'twintails':1200,'braids':1400,'spacebuns':1500,'wavy':1600,'pixie':1100,'bowl':1000,'sidebraid':1500,'afro':1600,'mohawk':1700,'halfup':1300,'squareglasses':900,'catglasses':1200,'roundshades':1400,'sportshades':1600,'starshades':1700,'beanie':1200,'beret':1400,'bucket':1300,'crown':2200,'catband':1300,'flowerband':1500,'scrunchie':1000,'ribbontie':1100,'starclip':800}.get(id,0);
+        return id.matches('sb-(boys|girls)-hair-[1-9]') ? 1200
+          : id.matches('sb-(boys|girls)-outfit-[1-9]') ? 1800
+          : id.matches('sb-(boys|girls)-bottom-[1-9]') ? 1200
+          : id.matches('sb-(boys|girls)-shoes-[1-9]') ? 1000
+          : {'hoodie':1500,'overalls':2000,'dress':2000,'jacket':2500,'sneakers':1000,'boots':1500,'rainboots':1200,'glasses':800,'cap':1000,'bow':800,'headphones':1800,'sailor':2200,'tracksuit':1800,'raincoat':2300,'hanbok':2800,'spacesuit':3200,'chef':2400,'knit':1900,'flowerdress':2400,'hightops':1400,'loafers':1300,'sandals':900,'ballet':1300,'spaceboots':1800,'skates':2200,'twintails':1200,'braids':1400,'spacebuns':1500,'wavy':1600,'pixie':1100,'bowl':1000,'sidebraid':1500,'afro':1600,'mohawk':1700,'halfup':1300,'squareglasses':900,'catglasses':1200,'roundshades':1400,'sportshades':1600,'starshades':1700,'beanie':1200,'beret':1400,'bucket':1300,'crown':2200,'catband':1300,'flowerband':1500,'scrunchie':1000,'ribbontie':1100,'starclip':800}.get(id,0);
       }
       function avatarItemPath(studentId,itemId) { return /databases/$(database)/documents/schools/$(sid)/avatars/$(studentId)/items/$(itemId); }
+      function storybookChoice(n,max) { return n is int && n>=0 && n<max; }
+      function storybookOwned(studentId,c,part,n) {
+        return n==0 || exists(avatarItemPath(studentId,'sb-'+c+'-'+part+'-'+string(n)));
+      }
+      function storybookShape(studentId,b) {
+        let a=b.style;
+        return b.keys().hasAll(['collection','style','shape']) && b.keys().hasOnly(['collection','style','shape'])
+          && b.collection in ['boys','girls']
+          && a.keys().hasAll(['face','hair','eyes','nose','mouth','outfit','bottom','shoes'])
+          && a.keys().hasOnly(['face','hair','eyes','nose','mouth','outfit','bottom','shoes'])
+          && storybookChoice(a.face,4) && storybookChoice(a.hair,10) && storybookChoice(a.eyes,10)
+          && storybookChoice(a.nose,10) && storybookChoice(a.mouth,10) && storybookChoice(a.outfit,10)
+          && storybookChoice(a.bottom,10) && storybookChoice(a.shoes,10)
+          && b.shape.keys().hasAll(['height','build']) && b.shape.keys().hasOnly(['height','build'])
+          && b.shape.height is number && b.shape.height>=0 && b.shape.height<=100
+          && b.shape.build is number && b.shape.build>=0 && b.shape.build<=100
+          && storybookOwned(studentId,b.collection,'hair',a.hair)
+          && storybookOwned(studentId,b.collection,'outfit',a.outfit)
+          && storybookOwned(studentId,b.collection,'bottom',a.bottom)
+          && storybookOwned(studentId,b.collection,'shoes',a.shoes);
+      }
       function avatarShape(studentId) {
         let d=request.resource.data;
         let a=d.appearance;
         return d.keys().hasAll(['schoolId','studentId','appearance','schemaVersion','updatedAt'])
-          && d.keys().hasOnly(['schoolId','studentId','appearance','schemaVersion','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','appearance','storybook','schemaVersion','updatedAt'])
+          && (!('storybook' in d) || storybookShape(studentId,d.storybook))
           && d.schoolId==sid && d.studentId==studentId && d.schemaVersion==1 && d.updatedAt==request.time
           && a.keys().hasAll(['skin','face','eyes','nose','mouth','hair','hairColor','outfit','shoes','accessory','eyewear','headwear'])
           && a.keys().hasOnly(['skin','face','eyes','nose','mouth','hair','hairColor','outfit','shoes','accessory','eyewear','headwear'])
@@ -781,12 +807,12 @@ service cloud.firestore {
           && a.accessory in ['none','bow','headphones','scrunchie','ribbontie','starclip']
           && a.eyewear in ['none','glasses','squareglasses','catglasses','roundshades','sportshades','starshades']
           && a.headwear in ['none','cap','beanie','beret','bucket','crown','catband','flowerband']
-          && (a.outfit in ['tee'] || exists(avatarItemPath(studentId,a.outfit)))
+          && (('storybook' in d && resource != null && a==resource.data.appearance) || ((a.outfit in ['tee'] || exists(avatarItemPath(studentId,a.outfit)))
           && (a.shoes in ['basic'] || exists(avatarItemPath(studentId,a.shoes)))
           && (a.accessory in ['none'] || exists(avatarItemPath(studentId,a.accessory)))
           && (a.eyewear in ['none'] || exists(avatarItemPath(studentId,a.eyewear)))
           && (a.headwear in ['none'] || exists(avatarItemPath(studentId,a.headwear)))
-          && (a.hair in ['short','bob','long','curly','ponytail','spiky'] || exists(avatarItemPath(studentId,a.hair)));
+          && (a.hair in ['short','bob','long','curly','ponytail','spiky'] || exists(avatarItemPath(studentId,a.hair)))));
       }
       function avatarPayment(studentId,itemId,journalId) {
         let j=getAfter(journalPath(journalId)).data;
@@ -806,7 +832,7 @@ service cloud.firestore {
         allow delete, list: if false;
         match /items/{itemId} {
           allow get: if teacher(sid) || ownStudent(sid,studentId);
-          allow list: if bounded() && (teacher(sid) || ownStudent(sid,studentId));
+          allow list: if request.query.limit != null && request.query.limit<=200 && (teacher(sid) || ownStudent(sid,studentId));
           allow create: if ownStudent(sid,studentId)
             && request.resource.data.keys().hasAll(['schoolId','studentId','itemId','journalId','createdAt'])
             && request.resource.data.keys().hasOnly(['schoolId','studentId','itemId','journalId','createdAt'])

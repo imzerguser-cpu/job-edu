@@ -52,3 +52,10 @@ Saved asset: heads-v2.png (1774 x 887). Generated using built-in imagegen with h
 - Eye sprites are 82% of previous size; pupil-center spacing is 97% for sparkling eyes, 85% for smiling eyes, 94% for the others. Eye line raised 8 local units. Nose/mouth use optical center anchors.
 - Shoe recoloring clips to shoe contours only; outfit recoloring excludes neck/hands. Raw skin remains unfiltered.
 - character-check.html provides development-only visual comparison of ten choices per category for each collection.
+
+
+## Account and shop integration
+
+The signed-in student map now opens StorybookStudio in the character and fashion-shop dialogs. Appearance (four face shapes, facial features, collection and body proportions) is stored in the student's existing avatar document under `storybook`. Saving updates the map toolbar and profile. The standalone character-preview page remains an unsaved design playground and links back to sign-in.
+
+Basic index 0 in each clothing category is free. The shop offers 72 additional collection-specific designs: hair 12, upper garments 18, bottoms 12 and shoes 10 school currency units each (100 minor units per unit). Purchases use the existing atomic ledger and immutable ownership receipts. Firestore validates prices, ownership and shape bounds. Legacy appearance and purchased items remain available through the existing-character tab; saving that appearance switches back to the legacy renderer.

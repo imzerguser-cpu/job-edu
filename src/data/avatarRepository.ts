@@ -1,13 +1,16 @@
-import {collection,doc,getDocFromServer,getDocsFromServer,limit,query,runTransaction,serverTimestamp,setDoc,type Firestore} from 'firebase/firestore';
+import {storybookItems,validateStorybook,canWearStorybook,type StorybookAppearance} from '../domain/storybook';
+import {collection,doc,getDocFromServer,getDocsFromServer,limit,query,runTransaction,serverTimestamp,setDoc,deleteField,type Firestore} from 'firebase/firestore';
 import {assertApplicant} from '../domain/jobs';
 import {schoolPath,type SchoolContext} from '../domain/model';
 import {ISSUER_ACCOUNT_ID} from '../domain/finance';
 import {avatarJournalId,canWear,defaultAvatar,fashionItems,validateAvatar,normalizeAvatar,type AvatarAppearance} from '../domain/avatar';
 
-export interface AvatarSnapshot {appearance:AvatarAppearance;owned:string[];balanceMinor:number}
+export interface AvatarSnapshot {appearance:AvatarAppearance;storybook?:StorybookAppearance;owned:string[];balanceMinor:number}
 export interface AvatarStore {
+  readonly preview?:boolean;
   load():Promise<AvatarSnapshot>;
   save(appearance:AvatarAppearance):Promise<void>;
+  saveStorybook(appearance:StorybookAppearance):Promise<void>;
   buy(itemId:string):Promise<void>;
 }
 export function firestoreAvatar(db:Firestore,context:SchoolContext):AvatarStore{
@@ -16,17 +19,26 @@ export function firestoreAvatar(db:Firestore,context:SchoolContext):AvatarStore{
   const account=doc(db,schoolPath(context,'accounts',studentId));
   return {
     async load(){
-      const [p,items,money]=await Promise.all([getDocFromServer(profile),getDocsFromServer(query(collection(profile,'items'),limit(100))),getDocFromServer(account)]);
+      const [p,items,money]=await Promise.all([getDocFromServer(profile),getDocsFromServer(query(collection(profile,'items'),limit(200))),getDocFromServer(account)]);
       const appearance=p.exists()?normalizeAvatar(p.data().appearance):{...defaultAvatar};
       validateAvatar(appearance);
-      return {appearance,owned:items.docs.map(d=>d.id),balanceMinor:money.exists()?money.data().balanceMinor:0};
+      const storybook=p.exists()?p.data().storybook:undefined;
+      if(storybook)validateStorybook(storybook);
+      return {appearance,...(storybook?{storybook}:{}),owned:items.docs.map(d=>d.id),balanceMinor:money.exists()?money.data().balanceMinor:0};
     },
     async save(appearance){
       validateAvatar(appearance);
-      await setDoc(profile,{schoolId:context.schoolId,studentId,appearance,schemaVersion:1,updatedAt:serverTimestamp()});
+      await setDoc(profile,{schoolId:context.schoolId,studentId,appearance,schemaVersion:1,updatedAt:serverTimestamp(),storybook:deleteField()},{merge:true});
+    },
+    async saveStorybook(storybook){
+      validateStorybook(storybook);
+      await runTransaction(db,async tx=>{
+        const previous=await tx.get(profile);
+        tx.set(profile,{schoolId:context.schoolId,studentId,appearance:previous.exists()?normalizeAvatar(previous.data().appearance):{...defaultAvatar},storybook,schemaVersion:1,updatedAt:serverTimestamp()});
+      });
     },
     async buy(itemId){
-      const item=fashionItems.find(i=>i.id===itemId);
+      const item=[...fashionItems,...storybookItems].find(i=>i.id===itemId);
       if(!item)throw new Error('판매 중인 아이템이 아니에요.');
       const receipt=doc(collection(profile,'items'),item.id);
       const issuer=doc(db,schoolPath(context,'accounts',ISSUER_ACCOUNT_ID));
@@ -53,8 +65,10 @@ export function firestoreAvatar(db:Firestore,context:SchoolContext):AvatarStore{
 export function previewAvatarStore(initialBalance=10000):AvatarStore{
   let snapshot:AvatarSnapshot={appearance:{...defaultAvatar},owned:[],balanceMinor:initialBalance};
   return {
+    preview:true,
     async load(){return structuredClone(snapshot)},
-    async save(a){validateAvatar(a);if(!canWear(a,snapshot.owned))throw new Error('구매한 아이템만 저장할 수 있어요.');snapshot={...snapshot,appearance:{...a}}},
-    async buy(id){const item=fashionItems.find(i=>i.id===id);if(!item)throw new Error('없는 아이템이에요.');if(snapshot.owned.includes(id))throw new Error('이미 가지고 있어요.');if(snapshot.balanceMinor<item.priceMinor)throw new Error('잔액이 부족해요.');snapshot={...snapshot,balanceMinor:snapshot.balanceMinor-item.priceMinor,owned:[...snapshot.owned,id]}},
+    async save(a){validateAvatar(a);if(!canWear(a,snapshot.owned))throw new Error('구매한 아이템만 저장할 수 있어요.');snapshot={...snapshot,appearance:{...a},storybook:undefined}},
+    async saveStorybook(a){validateStorybook(a);if(!canWearStorybook(a,snapshot.owned))throw new Error('구매한 아이템만 저장할 수 있어요.');snapshot={...snapshot,storybook:structuredClone(a)}},
+    async buy(id){const item=[...fashionItems,...storybookItems].find(i=>i.id===id);if(!item)throw new Error('없는 아이템이에요.');if(snapshot.owned.includes(id))throw new Error('이미 가지고 있어요.');if(snapshot.balanceMinor<item.priceMinor)throw new Error('잔액이 부족해요.');snapshot={...snapshot,balanceMinor:snapshot.balanceMinor-item.priceMinor,owned:[...snapshot.owned,id]}},
   };
 }

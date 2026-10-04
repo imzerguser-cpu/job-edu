@@ -41,7 +41,7 @@ function Preview(){
         <button className="reset-shape" onClick={()=>setShape(growthShape(grade,reference))}>학년 기준 비율로 되돌리기</button>
       </details>
       <button className="reset-shape reset-style" onClick={()=>{setStyle({...defaultStyle});setMessage('꾸미기를 처음 모습으로 되돌렸어요.')}}>꾸미기 처음으로</button>
-      <p className="prototype-note">디자인 체험 화면 · 선택한 모습은 학교 계정에 저장되지 않아요.</p>
+      <p className="prototype-note">디자인 체험 화면 · 선택한 모습은 학교 계정에 저장되지 않아요. <a href="/">학교 계정으로 로그인해서 저장·구매하기</a></p>
     </section></div>
   </main>;
 }

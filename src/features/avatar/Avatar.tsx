@@ -1,10 +1,13 @@
+import {StorybookAvatar} from './StorybookAvatar';
+import type {StorybookAppearance} from '../../domain/storybook';
 import type {AvatarAppearance} from '../../domain/avatar';
 import {HairBack,HairFront,OutfitDetails,outfitColors,NewShoes,Eyewear,Headwear,HairAccessories} from './FashionLayers';
 const skins={peach:'#ffd7b5',sand:'#e9b98c',gold:'#dca46e',brown:'#b87950',deep:'#805037',rose:'#f2c3b5'};
 const hairColors={black:'#292939',brown:'#5a3b30',chestnut:'#9c5638',blond:'#e9b74d',purple:'#8a68b7'};
 
 /** Layered vector avatar: a complete body with generous margins, never cropped. */
-export function Avatar({appearance:a,className='',label='내 캐릭터'}:{appearance:AvatarAppearance;className?:string;label?:string}){
+export function Avatar({appearance:a,storybook,className='',label='내 캐릭터'}:{appearance:AvatarAppearance;storybook?:StorybookAppearance;className?:string;label?:string}){
+  if(storybook)return <span className={`avatar-art ${className}`}><StorybookAvatar style={storybook.style} shape={storybook.shape} collection={storybook.collection} label={label}/></span>;
   const skin=skins[a.skin],hair=hairColors[a.hairColor];
   const faceWidth=a.face==='oval'?49:a.face==='soft'?56:59;
   const shirt=outfitColors[a.outfit];

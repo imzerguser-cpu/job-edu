@@ -1,3 +1,5 @@
+import {StorybookStudio} from './StorybookStudio';
+import type {StorybookAppearance} from '../../domain/storybook';
 import {useEffect,useRef,useState} from 'react';
 import {avatarOptions,canWear,defaultAvatar,fashionItems,optionLabels,partLabels,wearItem,type AvatarAppearance,type AvatarPart,type FashionItem,type FashionSlot} from '../../domain/avatar';
 import type {AvatarSnapshot,AvatarStore} from '../../data/avatarRepository';
@@ -5,7 +7,7 @@ import {formatMoney} from '../../domain/money';
 import {Avatar} from './Avatar';
 import '../../ui/avatar.css';
 
-export function AvatarStudio({store,currencySymbol,onSaved,onShop,shop=false}:{store:AvatarStore;currencySymbol:string;onSaved:(a:AvatarAppearance)=>void;onShop?:()=>void;shop?:boolean}){
+function LegacyAvatarStudio({store,currencySymbol,onSaved,onShop,shop=false}:{store:AvatarStore;currencySymbol:string;onSaved:(a:AvatarAppearance)=>void;onShop?:()=>void;shop?:boolean}){
   const [data,setData]=useState<AvatarSnapshot|null>(null),[draft,setDraft]=useState<AvatarAppearance>({...defaultAvatar});
   const [part,setPart]=useState<AvatarPart>('face'),[filter,setFilter]=useState<'all'|FashionSlot>('all');
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[pending,setPending]=useState<FashionItem|null>(null);
@@ -62,4 +64,9 @@ export function AvatarStudio({store,currencySymbol,onSaved,onShop,shop=false}:{s
       </>}
     </section>
   </div>;
+}
+
+export function AvatarStudio(props:{store:AvatarStore;currencySymbol:string;onSaved:(a:AvatarAppearance)=>void;onStorybookSaved?:(a:StorybookAppearance)=>void;grade?:number;onShop?:()=>void;shop?:boolean}){
+  const [legacy,setLegacy]=useState(false);
+  return <><div className="avatar-tabs"><button aria-pressed={!legacy} onClick={()=>setLegacy(false)}>동화 캐릭터</button><button aria-pressed={legacy} onClick={()=>setLegacy(true)}>기존 캐릭터·보유 아이템</button></div>{legacy?<LegacyAvatarStudio {...props}/>:<StorybookStudio key={props.shop?'shop':'wardrobe'} {...props} onSaved={props.onStorybookSaved}/>}</>;
 }

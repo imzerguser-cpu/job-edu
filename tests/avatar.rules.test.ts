@@ -1,3 +1,4 @@
+import {defaultStorybook,storybookItems} from '../src/domain/storybook';
 import {readFileSync} from 'node:fs';
 import {beforeAll,beforeEach,afterAll,describe,it,expect} from 'vitest';
 import {initializeTestEnvironment,assertFails,type RulesTestEnvironment} from '@firebase/rules-unit-testing';
@@ -64,4 +65,34 @@ describe('avatar ownership and school currency',()=>{
     }
     await assertFails(batch.commit());expect((await store().load()).balanceMinor).toBe(200000);
   });
+});
+
+describe('storybook account integration',()=>{
+ it('saves free choices and body proportions and reloads from another session',async()=>{
+  const a=defaultStorybook();a.collection='girls';a.style.face=3;a.style.eyes=9;a.shape={height:70,build:60};
+  await store().saveStorybook(a);expect((await store().load()).storybook).toEqual(a);
+ });
+ it('buys all catalogue items, keeps more than 100 receipts, equips four paid slots and preserves legacy wardrobe',async()=>{
+  for(const item of [...fashionItems,...storybookItems])await store().buy(item.id);
+  await store().save({...defaultAvatar,outfit:'hoodie',shoes:'boots',eyewear:'glasses',headwear:'cap',hair:'braids',accessory:'bow'});
+  const a=defaultStorybook();a.style={...a.style,hair:9,outfit:9,bottom:9,shoes:9};
+  await store().saveStorybook(a);
+  const loaded=await store().load();expect(loaded.owned).toHaveLength(121);expect(loaded.storybook).toEqual(a);expect(loaded.appearance.outfit).toBe('hoodie');
+  expect(loaded.balanceMinor).toBe(200000-[...fashionItems,...storybookItems].reduce((sum,i)=>sum+i.priceMinor,0));
+  await store().save(defaultAvatar);expect((await store().load()).storybook).toBeUndefined();expect((await store().load()).owned).toHaveLength(121);
+ },60000);
+ it('rejects unowned clothing, other collection receipts and malformed direct writes',async()=>{
+  const a=defaultStorybook();a.style.outfit=1;
+  await expect(store().saveStorybook(a)).rejects.toThrow();
+  await store().buy('sb-girls-outfit-1');await expect(store().saveStorybook(a)).rejects.toThrow();
+  for(const bad of [{...defaultStorybook(),shape:{height:101,build:50}},{...defaultStorybook(),style:{...defaultStorybook().style,face:4}},{...a,collection:'other'}]){
+   await assertFails(setDoc(doc(db(),'schools/a/avatars/one'),{schoolId:'a',studentId:'one',appearance:defaultAvatar,storybook:bad,schemaVersion:1,updatedAt:serverTimestamp()}));
+  }
+ });
+ it('charges new clothing only once and rejects insufficient funds',async()=>{
+  await expect(store('two').buy('sb-boys-shoes-3')).rejects.toThrow();
+  const result=await Promise.allSettled([store().buy('sb-boys-shoes-3'),store().buy('sb-boys-shoes-3')]);
+  expect(result.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+  expect((await store().load()).balanceMinor).toBe(199000);
+ });
 });

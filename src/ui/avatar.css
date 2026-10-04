@@ -22,3 +22,9 @@
 .map-toolbar .toolbar-avatar{width:32px;height:42px;flex:none}
 .hud-avatar .avatar-art{width:100%;height:100%}
 @media(max-width:640px){.avatar-studio{grid-template-columns:1fr;gap:14px}.avatar-preview{position:static;display:grid;grid-template-columns:100px 1fr;text-align:left}.avatar-preview>.avatar-art{grid-row:1/5;height:145px;width:100px}.avatar-preview .button{grid-column:2}.avatar-preview p{grid-column:2}.avatar-choices,.fashion-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.avatar-confirm{position:static}}
+
+.storybook-studio .avatar-preview>.storybook-avatar{width:100%;height:clamp(200px,36dvh,360px)}
+.storybook-thumbnail{width:100%;height:110px;display:grid;place-items:center}.storybook-thumbnail svg{width:100%;height:100%;max-width:130px}
+.storybook-controls{border:0;padding:0;margin:0;min-width:0}.storybook-range{display:flex;gap:12px;align-items:center;margin:12px 0}.storybook-range input{min-width:0;flex:1}
+.avatar-art>.storybook-avatar{display:block;width:100%;height:100%}
+@media(max-width:640px){.storybook-studio .avatar-preview>.storybook-avatar{grid-row:1/5;width:100px;height:170px}.storybook-studio .avatar-preview{position:sticky;top:0;z-index:3}.storybook-studio .avatar-preview p{font-size:.72rem}}
