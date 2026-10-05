@@ -247,3 +247,8 @@
 .setup-card:hover,.setup-card:focus-visible{border-color:var(--game-gold);transform:translateY(-2px)}
 .setup-card .avatar-art,.setup-card svg{max-height:300px}
 .setup-card b{font-size:1.3rem}
+.setup-card[aria-pressed="true"]{border-color:var(--game-gold);background:#fff8e1}
+.setup-confirm{grid-column:1 / -1;background:#fffaf0;border:3px solid var(--game-gold);border-radius:20px;padding:16px 18px;text-align:center}
+.setup-confirm h2{font-size:1.3rem;margin-bottom:6px}
+.setup-warning{background:#fff0ef;color:#b03c3c;border-radius:12px;padding:10px 12px;line-height:1.6}
+.setup-confirm .header-actions{justify-content:center;flex-wrap:wrap}

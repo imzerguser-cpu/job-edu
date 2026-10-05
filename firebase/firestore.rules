@@ -828,7 +828,10 @@ service cloud.firestore {
       }
       match /avatars/{studentId} {
         allow get: if teacher(sid) || ownStudent(sid,studentId);
-        allow create, update: if ownStudent(sid,studentId) && avatarShape(studentId);
+        // 남학생/여학생(storybook.collection)은 처음 저장한 뒤 바꾸거나 지울 수 없다(D-126, 사용자 요청).
+        allow create, update: if ownStudent(sid,studentId) && avatarShape(studentId)
+          && (resource == null || !('storybook' in resource.data)
+            || ('storybook' in request.resource.data && request.resource.data.storybook.collection == resource.data.storybook.collection));
         allow delete, list: if false;
         match /items/{itemId} {
           allow get: if teacher(sid) || ownStudent(sid,studentId);

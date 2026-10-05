@@ -68,6 +68,13 @@ describe('avatar ownership and school currency',()=>{
 });
 
 describe('storybook account integration',()=>{
+ it('locks the boys/girls choice after the first save but keeps everything else editable',async()=>{
+  const a=defaultStorybook();a.collection='girls';
+  await store().saveStorybook(a);
+  await expect(store().saveStorybook({...a,collection:'boys'})).rejects.toThrow();
+  const b={...a,style:{...a.style,face:2,eyes:5}};
+  await store().saveStorybook(b);expect((await store().load()).storybook).toEqual(b);
+ });
  it('saves free choices and body proportions and reloads from another session',async()=>{
   const a=defaultStorybook();a.collection='girls';a.style.face=3;a.style.eyes=9;a.shape={height:70,build:60};
   await store().saveStorybook(a);expect((await store().load()).storybook).toEqual(a);
@@ -79,7 +86,8 @@ describe('storybook account integration',()=>{
   await store().saveStorybook(a);
   const loaded=await store().load();expect(loaded.owned).toHaveLength(121);expect(loaded.storybook).toEqual(a);expect(loaded.appearance.outfit).toBe('hoodie');
   expect(loaded.balanceMinor).toBe(200000-[...fashionItems,...storybookItems].reduce((sum,i)=>sum+i.priceMinor,0));
-  await store().save(defaultAvatar);expect((await store().load()).storybook).toBeUndefined();expect((await store().load()).owned).toHaveLength(121);
+  // 남/여가 정해진 뒤에는 동화 캐릭터를 지울 수 없다(D-126)
+  await expect(store().save(defaultAvatar)).rejects.toThrow();expect((await store().load()).storybook).toEqual(a);expect((await store().load()).owned).toHaveLength(121);
  },60000);
  it('rejects unowned clothing, other collection receipts and malformed direct writes',async()=>{
   const a=defaultStorybook();a.style.outfit=1;
