@@ -2,13 +2,16 @@ import {useEffect,useRef,useState} from 'react';
 import type {AvatarSnapshot,AvatarStore} from '../../data/avatarRepository';
 import {defaultStorybook,canWearStorybook,paidParts,storybookItems,storybookItemId,type StorybookAppearance,type StorybookItem,type StorybookSlot} from '../../domain/storybook';
 import {formatMoney} from '../../domain/money';
+import {purchaseLock,storybookItemLevel} from '../../domain/fashionLevels';
 import {growthShape} from '../../domain/studentGrowth';
 import {StorybookAvatar} from './StorybookAvatar';
 import {StyleThumbnail} from './StorybookParts';
 import {categoryLabels,type StyleCategory} from './storybookCatalog';
 import {collectionCatalogs} from './studentCollections';
 import '../../ui/avatar.css';
-export function StorybookStudio({store,currencySymbol,shop=false,grade=3,onSaved,onShop}:{store:AvatarStore;currencySymbol:string;shop?:boolean;grade?:number;onSaved?:(a:StorybookAppearance)=>void;onShop?:()=>void}){
+// level: 지금 내 레벨(D-120). undefined면 잠금 없음(체험 미리보기), null이면 아직 계산 중.
+export function StorybookStudio({store,currencySymbol,shop=false,grade=3,onSaved,onShop,level}:{store:AvatarStore;currencySymbol:string;shop?:boolean;grade?:number;onSaved?:(a:StorybookAppearance)=>void;onShop?:()=>void;level?:number|null}){
+  const lockOf=(item:StorybookItem)=>level===undefined?{locked:false as const}:purchaseLock(storybookItemLevel(item),level);
   const [data,setData]=useState<AvatarSnapshot|null>(null),[draft,setDraft]=useState(()=>defaultStorybook(grade));
   const [category,setCategory]=useState<StyleCategory>(shop?'outfit':'face'),[pending,setPending]=useState<StorybookItem|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[attempt,setAttempt]=useState(0);
@@ -31,15 +34,15 @@ export function StorybookStudio({store,currencySymbol,shop=false,grade=3,onSaved
     <fieldset disabled={busy} className="storybook-controls"><legend className="sr-only">캐릭터 선택</legend>
     <div className="avatar-tabs">{(['boys','girls'] as const).map(c=><button key={c} aria-pressed={draft.collection===c} onClick={()=>{if(c===draft.collection)return;setDraft(d=>({...d,collection:c,style:{...d.style,hair:0,outfit:0,bottom:0,shoes:0}}));setPending(null);setMessage('')}}>{c==='boys'?'남학생':'여학생'}</button>)}</div>
     <div className="avatar-tabs">{categories.map(k=><button key={k} aria-pressed={category===k} onClick={()=>{setCategory(k);setPending(null)}}>{categoryLabels[k]} {catalog[k].length}</button>)}</div>
-    {pending&&<section className="avatar-confirm" aria-label="구매 확인"><h3>{pending.name}</h3><p>{formatMoney(pending.priceMinor,currencySymbol)} 사용 · 구매 후 잔액 {formatMoney(data.balanceMinor-pending.priceMinor,currencySymbol)}</p><button className="button primary" disabled={data.balanceMinor<pending.priceMinor} onClick={buy}>학교 화폐로 구매 확정</button><button className="button quiet" onClick={()=>setPending(null)}>취소</button></section>}
+    {pending&&<section className="avatar-confirm" aria-label="구매 확인"><h3>{pending.name}</h3><p>{formatMoney(pending.priceMinor,currencySymbol)} 사용 · 구매 후 잔액 {formatMoney(data.balanceMinor-pending.priceMinor,currencySymbol)}</p><button className="button primary" disabled={lockOf(pending).locked||data.balanceMinor<pending.priceMinor} onClick={buy}>학교 화폐로 구매 확정</button><button className="button quiet" onClick={()=>setPending(null)}>취소</button></section>}
     <div className="fashion-grid">{catalog[category].map((name,index)=>{
       const paid=(paidParts as readonly string[]).includes(category)&&index>0;
       const item=paid?storybookItems.find(i=>i.id===storybookItemId(draft.collection,category as StorybookSlot,index)):undefined;
       const owned=!item||data.owned.includes(item.id);
       return <article className="fashion-card" key={`${draft.collection}-${category}-${index}`}>
-        <div className="storybook-thumbnail"><StyleThumbnail category={category} index={index} collection={draft.collection}/></div><b>{name}</b><span>{item?(owned?'보유 중':formatMoney(item.priceMinor,currencySymbol)):'무료'}</span>
+        <div className="storybook-thumbnail"><StyleThumbnail category={category} index={index} collection={draft.collection}/></div><b>{name}</b><span>{item?(owned?'보유 중':formatMoney(item.priceMinor,currencySymbol)):'무료'}</span>{item&&!owned&&level!==undefined&&<span className={`level-tag${lockOf(item).locked?' locked':''}`}>{lockOf(item).locked?'🔒 ':''}Lv.{storybookItemLevel(item)}</span>}
         <button className="button secondary" aria-pressed={draft.style[category]===index} onClick={()=>change(index)}>{draft.style[category]===index?'선택됨':owned?'선택하기':'미리 입기'}</button>
-        {item&&!owned&&<button className="button primary" disabled={data.balanceMinor<item.priceMinor} onClick={()=>{change(index);setPending(item)}}>{data.balanceMinor<item.priceMinor?'잔액 부족':'구매하기'}</button>}
+        {item&&!owned&&(()=>{const lock=lockOf(item);return <button className="button primary" disabled={lock.locked||data.balanceMinor<item.priceMinor} onClick={()=>{change(index);setPending(item)}}>{lock.locked?`🔒 ${lock.reason}`:data.balanceMinor<item.priceMinor?'잔액 부족':'구매하기'}</button>})()}
       </article>;
     })}</div>
     {!shop&&<><details className="section"><summary>키·체형 조절</summary><div className="avatar-tabs">{[1,2,3,4,5,6].map(g=><button key={g} onClick={()=>setDraft(d=>({...d,shape:growthShape(g)}))}>{g}학년 평균</button>)}</div>{(['height','build'] as const).map(k=><label key={k} className="storybook-range">{k==='height'?'키':'체형'}<input type="range" min="0" max="100" value={draft.shape[k]} onChange={e=>setDraft(d=>({...d,shape:{...d.shape,[k]:Number(e.target.value)}}))}/></label>)}</details>{onShop&&<button className="button secondary section" onClick={onShop}>패션 상점 열기</button>}</>}

@@ -2,7 +2,6 @@ import type {StorybookAppearance} from '../../domain/storybook';
 import {firestoreAvatar} from '../../data/avatarRepository';
 import {AvatarStudio} from '../avatar/AvatarStudio';
 import {Avatar} from '../avatar/Avatar';
-import {defaultAvatar,type AvatarAppearance} from '../../domain/avatar';
 import {useCallback,useEffect,useMemo,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
 import {listActiveStudents} from '../../data/schoolRepository';
@@ -32,7 +31,7 @@ import {DestinationMenu} from './CitizenMap';
 import {StudentMapLayout,type MapPanel} from './StudentMapLayout';
 import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {GameWindow,type GameTab} from './GameWindow';
-import {CharacterHud,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,loadCharacter,markLevelSeen} from './CitizenGrowth';
+import {CharacterHud,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,markLevelSeen} from './CitizenGrowth';
 import {loadGrowthStats} from './growthStats';
 import {levelInfo,totalXp,quests,type GrowthStats} from '../../domain/growth';
 import {GuideWorkspace} from './GuideWorkspace';
@@ -54,12 +53,10 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   const [roster,setRoster]=useState<Student[]>([citizen]);
   const [stats,setStats]=useState<GrowthStats|null>(null);
   const [refresh,setRefresh]=useState(0);
-  const character=loadCharacter(citizen.id);
   const avatarStore=useMemo(()=>firebase?firestoreAvatar(firebase.db,context):null,[context]);
   const [storybook,setStorybook]=useState<StorybookAppearance>();
-  const [avatar,setAvatar]=useState<AvatarAppearance>({...defaultAvatar});
-  useEffect(()=>{let alive=true;setAvatar({...defaultAvatar});setStorybook(undefined);avatarStore?.load().then(d=>{if(alive){setAvatar(d.appearance);setStorybook(d.storybook)}}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
-  const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onStorybookSaved={setStorybook} onSaved={a=>{setAvatar(a);setStorybook(undefined)}} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
+  useEffect(()=>{let alive=true;setStorybook(undefined);avatarStore?.load().then(d=>{if(alive)setStorybook(d.storybook)}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
+  const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onSaved={setStorybook} level={stats?levelInfo(totalXp(stats)).level:null} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
   const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
   useEffect(()=>{
     let alive=true;
@@ -93,7 +90,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
 
   let win:ReactNode=null;
   if(view==='guide')win=<GameWindow title="사용 안내서" subtitle="지도에서 시작하는 우리 사회" tabs={[{id:'guide',icon:'❔',label:'안내서',content:<GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>}]} onClose={closeGuide}/>;
-  else if(view==='profile')win=<GameWindow title="내 정보" subtitle="캐릭터와 성장 기록을 확인해요" tabs={[{id:'profile',icon:'👤',label:'내 정보',content:<CharacterHud storybook={storybook} avatar={avatar} citizen={citizen} community={school.communityName} character={character} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>}]} onClose={closeWindow}/>;
+  else if(view==='profile')win=<GameWindow title="내 정보" subtitle="캐릭터와 성장 기록을 확인해요" tabs={[{id:'profile',icon:'👤',label:'내 정보',content:<CharacterHud storybook={storybook} citizen={citizen} community={school.communityName} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>}]} onClose={closeWindow}/>;
   else if(view==='quests')win=<GameWindow title="지금 할 수 있는 모험" subtitle="하고 싶은 모험을 누르면 해당 건물로 이동해요" tabs={[{id:'quests',icon:'🧭',label:'모험',content:<QuestBoard stats={stats} onGo={go}/>}]} onClose={closeWindow}/>;
   else if(view==='goals')win=<GameWindow title="우리 반 공동 목표" subtitle="친구들과 함께 이루는 목표예요" tabs={[{id:'goals',icon:'🌱',label:'목표',content:<ClassGoalsBanner key={refresh} store={communityStore}/>}]} onClose={closeWindow}/>;
   else if(view==='places')win=<GameWindow title="건물 목록" subtitle="가고 싶은 건물을 골라요" tabs={[{id:'places',icon:'🏘️',label:'건물',content:<DestinationMenu onNavigate={go}/>}]} onClose={closeWindow}/>;
@@ -127,7 +124,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
     win=<GameWindow key={view+'-'+(tab??'')} initialTab={tab} buildingId={building.id} title={building.label} subtitle={building.subtitle} eyebrow={eyebrow} tabs={tabs} onClose={closeWindow}/>;
   }
 
-  return <StudentMapLayout avatar={<Avatar storybook={storybook} appearance={avatar} className="toolbar-avatar"/>} name={citizen.name} questCount={stats?quests(stats).length:null} onPanel={setView} onNavigate={go}>
+  return <StudentMapLayout avatar={<Avatar storybook={storybook} grade={citizen.grade} className="toolbar-avatar"/>} name={citizen.name} questCount={stats?quests(stats).length:null} onPanel={setView} onNavigate={go}>
     {levelUp&&<LevelUpToast level={levelUp.level} title={levelUp.title} onClose={()=>setLevelUp(null)}/>}
     {win}
   </StudentMapLayout>;

@@ -1,36 +1,20 @@
 import type {StorybookAppearance} from '../../domain/storybook';
 import {Avatar} from '../avatar/Avatar';
-import type {AvatarAppearance} from '../../domain/avatar';
-import {useState} from 'react';
 import {achievements,levelInfo,quests,totalXp,xpBreakdown,type GrowthStats} from '../../domain/growth';
 import type {Student} from '../../domain/model';
 import {buildings,type BuildingId} from './buildings';
 import {hollandInfo,type HollandType} from '../../domain/careerDiscovery';
-
-export const characters=['blue','cap','glasses','green','pink','purple','teal','yellow'] as const;
-export type CharacterId=typeof characters[number];
-export const characterSrc=(id:CharacterId)=>`/assets/characters/student_${id}_character.png`;
-
-// 캐릭터 선택은 이 기기(브라우저)에만 저장한다 — 꾸미기일 뿐 사회 기록이 아니어서
-// 새 Firestore 필드/Rules를 늘리지 않았다. 처음엔 학생 id로 정해진 캐릭터를 보여 준다.
-function characterKey(studentId:string){return `jobedu-character-${studentId}`}
-function defaultCharacter(studentId:string):CharacterId{let h=0;for(const c of studentId)h=(h*31+c.charCodeAt(0))>>>0;return characters[h%characters.length]}
-export function loadCharacter(studentId:string):CharacterId{
-  try{const saved=localStorage.getItem(characterKey(studentId));if(saved&&(characters as readonly string[]).includes(saved))return saved as CharacterId}catch{/* 저장소를 못 쓰면 기본 캐릭터 */}
-  return defaultCharacter(studentId);
-}
-export function saveCharacter(studentId:string,id:CharacterId){try{localStorage.setItem(characterKey(studentId),id)}catch{/* 이번 화면에서만 바뀐다 */}}
 
 // 레벨 업 알림: 마지막으로 본 레벨보다 올랐으면 한 번 축하해 준다.
 function levelKey(studentId:string){return `jobedu-level-seen-${studentId}`}
 export function lastSeenLevel(studentId:string){try{const n=Number(localStorage.getItem(levelKey(studentId)));return Number.isInteger(n)&&n>0?n:null}catch{return null}}
 export function markLevelSeen(studentId:string,level:number){try{localStorage.setItem(levelKey(studentId),String(level))}catch{/* 다음에 다시 축하해도 괜찮다 */}}
 
-export function CharacterHud({avatar,storybook,citizen,community,character,stats,jobCount,onGuide,onGrowth,onPickCharacter,onDiscover}:{avatar?:AvatarAppearance;storybook?:StorybookAppearance;citizen:Student;community:string;character:CharacterId;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void;onDiscover:()=>void}){
+export function CharacterHud({storybook,citizen,community,stats,jobCount,onGuide,onGrowth,onPickCharacter,onDiscover}:{storybook?:StorybookAppearance;citizen:Student;community:string;stats:GrowthStats|null;jobCount:number|null;onGuide:()=>void;onGrowth:()=>void;onPickCharacter:()=>void;onDiscover:()=>void}){
   const info=stats?levelInfo(totalXp(stats)):null;
   return <aside className="citizen-hud game-hud">
     <button type="button" className="hud-avatar" onClick={onPickCharacter} aria-label="내 캐릭터 바꾸기">
-      {avatar?<Avatar storybook={storybook} appearance={avatar}/>:<img src={characterSrc(character)} alt=""/>}
+      <Avatar storybook={storybook} grade={citizen.grade}/>
       <span className="hud-level">{info?`Lv.${info.level}`:'Lv.?'}</span>
     </button>
     <div className="hud-main">
@@ -89,15 +73,6 @@ export function GrowthPanel({stats}:{stats:GrowthStats|null}){
         <tbody>{rows.map(r=><tr key={r.key}><td>{r.label}</td><td>+{r.xp}</td><td>{r.count}번</td><td><b>{r.total.toLocaleString()}</b></td></tr>)}</tbody></table></div>
       <p className="muted">경험치는 선생님이 확인한 실제 기록으로만 계산돼요. 열심히 일하고, 아껴 쓰고, 의견을 내면 레벨이 올라요.</p>
     </section>
-  </div>;
-}
-
-export function CharacterPicker({current,onPick,onClose}:{current:CharacterId;onPick:(id:CharacterId)=>void;onClose:()=>void}){
-  const [choice,setChoice]=useState(current);
-  return <div className="character-picker">
-    <p>마음에 드는 캐릭터를 골라요. 이 기기에서 내 캐릭터로 보여요.</p>
-    <div className="character-grid">{characters.map(id=><button key={id} type="button" aria-pressed={choice===id} onClick={()=>setChoice(id)}><img src={characterSrc(id)} alt=""/></button>)}</div>
-    <div className="header-actions section"><button type="button" className="button primary" onClick={()=>{onPick(choice);onClose()}}>이 캐릭터로 할래요</button><button type="button" className="button quiet" onClick={onClose}>닫기</button></div>
   </div>;
 }
 

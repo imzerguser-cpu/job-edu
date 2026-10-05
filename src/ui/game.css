@@ -71,11 +71,6 @@
 .achievement small{font-size:.75rem;line-height:1.4}
 .achievement.earned{background:#fff8e1;color:var(--game-ink);border-color:var(--game-gold)}
 .achievement.earned span{filter:none}
-.character-picker p{margin-top:0}
-.character-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-.character-grid button{border:3px solid #eed8b2;background:#fff;border-radius:18px;padding:8px;aspect-ratio:1}
-.character-grid button img{width:100%;height:100%;object-fit:contain}
-.character-grid button[aria-pressed="true"]{border-color:var(--game-gold);background:#fff8e1;box-shadow:0 3px 0 #c9912a}
 
 @media(max-width:640px){
   .game-window-backdrop{padding:0}
@@ -87,7 +82,6 @@
   .hud-avatar{width:68px;height:68px}
   .hud-side{width:100%;flex-direction:row;align-items:center}
   .growth-panel .growth-level{flex-direction:column;text-align:center}
-  .character-grid{grid-template-columns:repeat(2,1fr)}
 }
 @media(prefers-reduced-motion:reduce){.game-window,.game-window-backdrop,.levelup-toast,.xp-bar span{animation:none;transition:none}}
 
@@ -208,3 +202,7 @@
 .board-summary small{color:var(--citizen-muted)}
 .board-flag{display:inline-block;background:#fff0ef;color:#b03c3c;border-radius:999px;padding:3px 8px;font-size:.75rem;font-weight:700;margin:2px}
 .board-ok{color:#2c6a3c;font-weight:700;font-size:.85rem}
+
+/* 레벨 잠금 아이템(D-120) */
+.level-tag{display:inline-block;align-self:center;font-size:.75rem;font-weight:800;border-radius:999px;padding:2px 8px;background:#e3f7ec;color:#1f6b4a}
+.level-tag.locked{background:#f1f3f6;color:#6d7c89}
