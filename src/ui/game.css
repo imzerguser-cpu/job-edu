@@ -241,3 +241,9 @@
   body.printing-report .report-note{display:none}
   body.printing-report .report-note-print{display:block;min-height:3em;border:1px solid #ccd;border-radius:8px;padding:8px;white-space:pre-wrap}
 }
+/* 처음 캐릭터 만들기(D-125) */
+.setup-choice{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;max-width:640px;margin:10px auto}
+.setup-card{display:flex;flex-direction:column;align-items:center;gap:8px;border:4px solid #efe3cc;background:#fff;border-radius:28px;padding:16px;box-shadow:0 6px 0 #ecd3a6;cursor:pointer}
+.setup-card:hover,.setup-card:focus-visible{border-color:var(--game-gold);transform:translateY(-2px)}
+.setup-card .avatar-art,.setup-card svg{max-height:300px}
+.setup-card b{font-size:1.3rem}

@@ -10,29 +10,31 @@ import {categoryLabels,type StyleCategory} from './storybookCatalog';
 import {collectionCatalogs} from './studentCollections';
 import '../../ui/avatar.css';
 // level: 지금 내 레벨(D-120). undefined면 잠금 없음(체험 미리보기), null이면 아직 계산 중.
-export function StorybookStudio({store,currencySymbol,shop=false,grade=3,onSaved,onShop,level}:{store:AvatarStore;currencySymbol:string;shop?:boolean;grade?:number;onSaved?:(a:StorybookAppearance)=>void;onShop?:()=>void;level?:number|null}){
+// setup: 처음 로그인했을 때의 캐릭터 만들기(D-125) — 무료 부위(얼굴형·눈·코·입·키/체형)만, 남/여는 앞 단계에서 정한다.
+export function StorybookStudio({store,currencySymbol,shop=false,grade=3,onSaved,onShop,level,initial,setup=false}:{store:AvatarStore;currencySymbol:string;shop?:boolean;grade?:number;onSaved?:(a:StorybookAppearance)=>void;onShop?:()=>void;level?:number|null;initial?:StorybookAppearance;setup?:boolean}){
+  const startLook=()=>initial?structuredClone(initial):defaultStorybook(grade);
   const lockOf=(item:StorybookItem)=>level===undefined?{locked:false as const}:purchaseLock(storybookItemLevel(item),level);
-  const [data,setData]=useState<AvatarSnapshot|null>(null),[draft,setDraft]=useState(()=>defaultStorybook(grade));
+  const [data,setData]=useState<AvatarSnapshot|null>(null),[draft,setDraft]=useState(startLook);
   const [category,setCategory]=useState<StyleCategory>(shop?'outfit':'face'),[pending,setPending]=useState<StorybookItem|null>(null);
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[attempt,setAttempt]=useState(0);
   const working=useRef(false),generation=useRef(0);
-  useEffect(()=>{const current=++generation.current;setData(null);setError('');store.load().then(d=>{if(current===generation.current){setData(d);setDraft(d.storybook??defaultStorybook(grade));}}).catch(e=>{if(current===generation.current)setError(e.message)});return()=>{generation.current++}},[store,grade,attempt]);
+  useEffect(()=>{const current=++generation.current;setData(null);setError('');store.load().then(d=>{if(current===generation.current){setData(d);setDraft(d.storybook??startLook());}}).catch(e=>{if(current===generation.current)setError(e.message)});return()=>{generation.current++}},[store,grade,attempt]);
   async function save(){if(working.current||!data)return;const selected=structuredClone(draft),current=generation.current;working.current=true;setBusy(true);setError('');setMessage('');try{await store.saveStorybook(selected);if(current===generation.current){setData({...data,storybook:selected});onSaved?.(selected);setMessage(store.preview?'체험 화면에 저장했어요. 새로고침하면 초기화돼요.':'학교 계정에 저장했어요. 다음 로그인에도 이 모습으로 만나요.')}}catch(e){if(current===generation.current)setError((e as Error).message)}finally{working.current=false;if(current===generation.current)setBusy(false)}}
   async function buy(){if(working.current||!pending||!data)return;const item=pending,current=generation.current;working.current=true;setBusy(true);setError('');setMessage('');let purchased=false;try{await store.buy(item.id);purchased=true;if(current===generation.current){setPending(null);setData(d=>d?{...d,owned:[...new Set([...d.owned,item.id])],balanceMinor:d.balanceMinor-item.priceMinor}:d);setMessage('구매 완료! 내 모습 저장을 누르면 착용한 모습도 저장돼요.')}const fresh=await store.load();if(current===generation.current)setData(fresh)}catch(e){if(current===generation.current)setError(purchased?'구매는 완료됐지만 잔액을 다시 불러오지 못했어요. 창을 다시 열어 확인해 주세요.':(e as Error).message)}finally{working.current=false;if(current===generation.current)setBusy(false)}}
   if(!data)return <div>{error?<><p role="alert" className="error">{error}</p><button className="button" onClick={()=>setAttempt(v=>v+1)}>다시 불러오기</button></>:<p role="status">내 캐릭터와 옷장을 불러오고 있어요.</p>}</div>;
   const catalog=collectionCatalogs[draft.collection],wearable=canWearStorybook(draft,data.owned);
-  const categories:readonly StyleCategory[]=shop?paidParts:Object.keys(catalog) as StyleCategory[];
+  const categories:readonly StyleCategory[]=shop?paidParts:setup?(Object.keys(catalog) as StyleCategory[]).filter(k=>!(paidParts as readonly string[]).includes(k)):Object.keys(catalog) as StyleCategory[];
   const change=(index:number)=>{setDraft(d=>({...d,style:{...d.style,[category]:index}}));setPending(null);setMessage('')};
   return <div className="avatar-studio storybook-studio"><aside className="avatar-preview">
     <StorybookAvatar shape={draft.shape} style={draft.style} collection={draft.collection} label="꾸미는 중인 내 캐릭터"/>
-    <button className="button primary" disabled={busy||!wearable} onClick={save}>{busy?'처리 중…':'내 모습 저장'}</button>
-    <button className="button quiet" disabled={busy} onClick={()=>{setDraft(data.storybook??defaultStorybook(grade));setPending(null);setMessage('')}}>저장된 모습으로</button>
+    <button className="button primary" disabled={busy||!wearable} onClick={save}>{busy?'처리 중…':setup?'이 모습으로 시작하기':'내 모습 저장'}</button>
+    {!setup&&<button className="button quiet" disabled={busy} onClick={()=>{setDraft(data.storybook??startLook());setPending(null);setMessage('')}}>저장된 모습으로</button>}
     <p>{wearable?'저장하면 마을과 내 정보에도 반영돼요.':'구매 전 미리 입어 보는 중이에요. 구매해야 저장할 수 있어요.'}</p>
   </aside><section className="avatar-options" aria-label={shop?'동화 캐릭터 상점':'동화 캐릭터 꾸미기'}>
     <div className="section-heading"><h2>{shop?'머리·상의·하의·신발 상점':'나만의 캐릭터'}</h2><span className="tag">잔액 {formatMoney(data.balanceMinor,currencySymbol)}</span></div>
     {error&&<p role="alert" className="error">{error}</p>}{message&&<p role="status" className="success">{message}</p>}
     <fieldset disabled={busy} className="storybook-controls"><legend className="sr-only">캐릭터 선택</legend>
-    <div className="avatar-tabs">{(['boys','girls'] as const).map(c=><button key={c} aria-pressed={draft.collection===c} onClick={()=>{if(c===draft.collection)return;setDraft(d=>({...d,collection:c,style:{...d.style,hair:0,outfit:0,bottom:0,shoes:0}}));setPending(null);setMessage('')}}>{c==='boys'?'남학생':'여학생'}</button>)}</div>
+    {!setup&&<div className="avatar-tabs">{(['boys','girls'] as const).map(c=><button key={c} aria-pressed={draft.collection===c} onClick={()=>{if(c===draft.collection)return;setDraft(d=>({...d,collection:c,style:{...d.style,hair:0,outfit:0,bottom:0,shoes:0}}));setPending(null);setMessage('')}}>{c==='boys'?'남학생':'여학생'}</button>)}</div>}
     <div className="avatar-tabs">{categories.map(k=><button key={k} aria-pressed={category===k} onClick={()=>{setCategory(k);setPending(null)}}>{categoryLabels[k]} {catalog[k].length}</button>)}</div>
     {pending&&<section className="avatar-confirm" aria-label="구매 확인"><h3>{pending.name}</h3><p>{formatMoney(pending.priceMinor,currencySymbol)} 사용 · 구매 후 잔액 {formatMoney(data.balanceMinor-pending.priceMinor,currencySymbol)}</p><button className="button primary" disabled={lockOf(pending).locked||data.balanceMinor<pending.priceMinor} onClick={buy}>학교 화폐로 구매 확정</button><button className="button quiet" onClick={()=>setPending(null)}>취소</button></section>}
     <div className="fashion-grid">{catalog[category].map((name,index)=>{

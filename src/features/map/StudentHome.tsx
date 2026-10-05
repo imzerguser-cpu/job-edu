@@ -1,6 +1,7 @@
 import type {StorybookAppearance} from '../../domain/storybook';
 import {firestoreAvatar} from '../../data/avatarRepository';
 import {AvatarStudio} from '../avatar/AvatarStudio';
+import {CharacterSetup} from '../avatar/CharacterSetup';
 import {Avatar} from '../avatar/Avatar';
 import {useCallback,useEffect,useRef,useMemo,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
@@ -57,7 +58,9 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   const [refresh,setRefresh]=useState(0);
   const avatarStore=useMemo(()=>firebase?firestoreAvatar(firebase.db,context):null,[context]);
   const [storybook,setStorybook]=useState<StorybookAppearance>();
-  useEffect(()=>{let alive=true;setStorybook(undefined);avatarStore?.load().then(d=>{if(alive)setStorybook(d.storybook)}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
+  // 저장된 캐릭터가 없으면(처음 로그인) 지도보다 먼저 캐릭터 만들기를 보여 준다(D-125). 불러오기에 실패하면 막지 않는다.
+  const [needsSetup,setNeedsSetup]=useState(false);
+  useEffect(()=>{let alive=true;setStorybook(undefined);setNeedsSetup(false);avatarStore?.load().then(d=>{if(alive){setStorybook(d.storybook);setNeedsSetup(!d.storybook)}}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
   const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onSaved={setStorybook} level={stats?levelInfo(totalXp(stats)).level:null} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
   const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
   const checkinStore=useMemo(()=>firebase?firestoreCheckins(firebase.db,context):undefined,[context]);
@@ -107,7 +110,8 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   ] satisfies GameTab[];
 
   let win:ReactNode=null;
-  if(view==='guide')win=<GameWindow title="사용 안내서" subtitle="지도에서 시작하는 우리 사회" tabs={[{id:'guide',icon:'❔',label:'안내서',content:<GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>}]} onClose={closeGuide}/>;
+  if(needsSetup&&avatarStore)win=<CharacterSetup store={avatarStore} name={citizen.name} grade={citizen.grade} currencySymbol={school.currencyName} onDone={a=>{setStorybook(a);setNeedsSetup(false)}}/>;
+  else if(view==='guide')win=<GameWindow title="사용 안내서" subtitle="지도에서 시작하는 우리 사회" tabs={[{id:'guide',icon:'❔',label:'안내서',content:<GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>}]} onClose={closeGuide}/>;
   else if(view==='profile')win=<GameWindow title="내 정보" subtitle="캐릭터와 성장 기록을 확인해요" tabs={[{id:'profile',icon:'👤',label:'내 정보',content:<CharacterHud storybook={storybook} citizen={citizen} community={school.communityName} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>}]} onClose={closeWindow}/>;
   else if(view==='news')win=<GameWindow title="새 소식" subtitle="내가 없는 동안 생긴 일이에요" tabs={[{id:'news',icon:'🔔',label:'새 소식',content:<NewsList items={news} onGo={go} onSeen={()=>markNewsSeen(citizen.id)}/>}]} onClose={()=>{setNews([]);closeWindow()}}/>;
   else if(view==='quests')win=<GameWindow title="지금 할 수 있는 모험" subtitle="하고 싶은 모험을 누르면 해당 건물로 이동해요" tabs={[{id:'quests',icon:'🧭',label:'모험',content:<QuestBoard stats={stats} onGo={go}/>}]} onClose={closeWindow}/>;
