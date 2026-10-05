@@ -1,8 +1,8 @@
 import {useEffect,useRef,useState,type FormEvent} from 'react';
-import {taskStatusNames,verificationKindNames,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry,type VerificationKind} from '../../domain/tasks';
+import {planBulkAssign,planBulkRestart,taskStatusNames,verificationKindNames,type Task,type TaskData,type TaskTemplate,type TaskSubmissionEntry,type VerificationKind} from '../../domain/tasks';
 import type {Evidence} from '../../domain/evidence';
 import type {Career} from '../../domain/jobs';
-import type {Student} from '../../domain/model';
+import {compareByGradeNumber,studentLabel,type Student} from '../../domain/model';
 import type {TaskStore} from '../../data/taskRepository';
 import type {CareerStore} from '../../data/careerRepository';
 import {compressImageToBase64} from '../../ui/imageCompress';
@@ -12,6 +12,7 @@ import {amountUnit,formatMoney,toMajor,toMinor} from '../../domain/money';
 export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter,currencySymbol='마동'}:{taskStore:TaskStore;careerStore:CareerStore;teacher:boolean;students:Student[];studentId?:string;iconFilter?:string[];currencySymbol?:string}){
   const [data,setData]=useState<TaskData>({templates:[],tasks:[]});
   const [jobs,setJobs]=useState<Career[]>([]);
+  const [assignments,setAssignments]=useState<{jobId:string;studentId:string;status:string}[]>([]);
   const [loading,setLoading]=useState(true),[busy,setBusy]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState('');
   const [view,setView]=useState<'templates'|'assign'|'review'>('templates');
   const [editing,setEditing]=useState<TaskTemplate|null>(null);
@@ -23,7 +24,7 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
   async function loadAll(){
     const [t,c]=await Promise.all([taskStore.load(),careerStore.load()]);
     if(!mounted.current)return;
-    setData(t);setJobs(c.jobs);
+    setData(t);setJobs(c.jobs);setAssignments(c.assignments);
   }
   useEffect(()=>{mounted.current=true;setLoading(true);loadAll().catch(e=>setError((e as Error).message)).finally(()=>{if(mounted.current)setLoading(false)});return()=>{mounted.current=false}},[taskStore,careerStore]);
 
@@ -32,6 +33,14 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
     try{await action();await loadAll();if(mounted.current){setMessage(success);setEditing(null);setSubmittingTask(null);setPhotoFile(null)}}
     catch(e){if(mounted.current)setError((e as Error).message)}
     finally{if(mounted.current)setBusy(false)}
+  }
+  // 여러 학생에게 한 번에(하나씩 순서대로 — 각 배정은 Rules가 따로 검사하는 트랜잭션). 일부가 실패해도 나머지는 계속한다.
+  async function bulk(label:string,items:(()=>Promise<void>)[],skippedNote=''){
+    if(busy)return;setBusy(true);setError('');setMessage('');
+    let ok=0,failed=0;
+    for(const item of items){try{await item();ok++}catch{failed++}}
+    try{await loadAll()}catch{/* 목록 새로고침 실패는 무시 */}
+    if(mounted.current){setMessage(`${label} ${ok}명 완료${failed?`, ${failed}명 실패`:''}${skippedNote}`);setBusy(false)}
   }
   async function submitPhotoTask(task:Task,caption:string){
     if(!photoFile)throw new Error('사진을 선택해 주세요.');
@@ -109,9 +118,27 @@ export function TaskWorkspace({taskStore,careerStore,teacher,students,iconFilter
       <h3>업무 배정</h3>
       {!activeTemplates.length?<p className="empty">운영 중인 업무가 없어요.</p>:<form className="assignment-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);void run(()=>taskStore.assign(String(f.get('template')),String(f.get('student'))),'업무를 배정했습니다.')}}>
         <label>업무<select name="template" required>{activeTemplates.map(t=><option key={t.id} value={t.id}>{t.title} · {jobName(t.jobId)}</option>)}</select></label>
-        <label>학생<select name="student" required><option value="">학생 선택</option>{students.filter(s=>s.status==='active').map(s=><option key={s.id} value={s.id}>{s.name} · {s.grade}학년</option>)}</select></label>
+        <label>학생<select name="student" required><option value="">학생 선택</option>{students.filter(s=>s.status==='active').sort(compareByGradeNumber).map(s=><option key={s.id} value={s.id}>{studentLabel(s)}</option>)}</select></label>
         <button className="button primary" disabled={busy}>배정</button>
       </form>}
+      {activeTemplates.length>0&&<div className="bulk-box">
+        <h4>한꺼번에 하기</h4>
+        <form className="assignment-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const t=activeTemplates.find(x=>x.id===String(new FormData(e.currentTarget).get('template')));if(!t)return;
+          const plan=planBulkAssign(t,assignments,data.tasks);
+          if(!plan.toAssign.length){setError(plan.alreadyInProgress?`이 직업을 맡은 학생 ${plan.alreadyInProgress}명 모두 이미 이 업무를 하고 있어요.`:'이 직업을 맡은 학생이 아직 없어요.');return}
+          void bulk('업무 배정',plan.toAssign.map(id=>()=>taskStore.assign(t.id,id)),plan.alreadyInProgress?` (이미 진행 중 ${plan.alreadyInProgress}명은 건너뜀)`:'')}}>
+          <label>업무<select name="template" required>{activeTemplates.map(t=><option key={t.id} value={t.id}>{t.title} · {jobName(t.jobId)} 맡은 학생 {assignments.filter(a=>a.status==='active'&&a.jobId===t.jobId).length}명</option>)}</select></label>
+          <button className="button primary" disabled={busy}>이 직업을 맡은 학생 모두에게 배정</button>
+        </form>
+        <form className="assignment-form" onSubmit={(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const templateId=String(new FormData(e.currentTarget).get('template'))||undefined;
+          const targets=planBulkRestart(data.tasks,templateId);
+          if(!targets.length){setError('다시 시작할 완료 업무가 없어요.');return}
+          void bulk('업무 다시 시작',targets.map(t=>()=>taskStore.restart(t)))}}>
+          <label>완료된 업무<select name="template" defaultValue=""><option value="">모든 업무</option>{activeTemplates.map(t=><option key={t.id} value={t.id}>{t.title} · 완료 {data.tasks.filter(x=>x.templateId===t.id&&x.status==='approved').length}건</option>)}</select></label>
+          <button className="button secondary" disabled={busy}>완료된 업무 모두 다시 시작</button>
+        </form>
+        <p className="muted">매일·매주 반복하는 업무는 "다시 시작"으로 새 차례를 열어 주세요. 학생은 다시 제출하고, 승인되면 완료 보상을 또 받아요.</p>
+      </div>}
       <p className="muted">해당 직업을 실제로 맡고 있는 학생만 배정할 수 있어요.</p>
       {data.tasks.length?<div className="list">{data.tasks.map(t=><article key={t.id} className="task-row"><div className="task-row-head"><b>{templateTitle(t.templateId)}</b><span>{studentName(t.assigneeStudentId)}</span></div><p className="muted">{taskStatusNames[t.status]}</p>{t.status==='approved'&&<button className="button quiet" disabled={busy} onClick={()=>run(()=>taskStore.restart(t),'다시 시작했습니다.')}>다시 시작</button>}</article>)}</div>:null}
     </section>}

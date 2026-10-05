@@ -196,3 +196,15 @@
 .picture-faces button small{font-weight:800;color:#4b5b6b}
 .picture-faces button[aria-checked="true"]{border-color:#3fae6a;background:#e3f7ec}
 .picture-faces button:active{transform:scale(.96)}
+
+/* 업무 일괄 배정 · 학급 현황판(D-118, D-119) */
+.bulk-box{margin-top:16px;padding:14px;border:1px dashed #b9d7f2;border-radius:16px;background:#f5faff}
+.bulk-box h4{margin:0 0 6px}
+.board-filters{align-items:flex-end;flex-wrap:wrap;margin-bottom:12px}
+.board-filters label{margin:0}
+.board-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.board-summary div{background:#f6f8fc;border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:2px}
+.board-summary b{font-size:1.2rem}
+.board-summary small{color:var(--citizen-muted)}
+.board-flag{display:inline-block;background:#fff0ef;color:#b03c3c;border-radius:999px;padding:3px 8px;font-size:.75rem;font-weight:700;margin:2px}
+.board-ok{color:#2c6a3c;font-weight:700;font-size:.85rem}
