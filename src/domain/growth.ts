@@ -24,8 +24,11 @@ export interface GrowthStats {
   helpsGiven:number;        // 도움 게시판에서 끝까지 도와준 수
   selfDiscoveries:number;   // "나를 찾는 모험"을 마친 횟수(경험치는 3번까지만)
   discoveryCode:string|null;// 가장 최근 흥미 코드(예: 'AS')
+  checkins:number;          // 출근 도장 찍은 날 수(D-122)
+  checkinStreak:number;     // 연속 출근 일수(주말 제외)
+  checkedInToday:boolean;
 }
-export const emptyGrowthStats:GrowthStats={applications:0,activeJobs:0,taskSubmissions:0,tasksApproved:0,tasksOpen:0,tasksRevision:0,openTaskBuilding:null,salaries:0,purchases:0,savingsJoined:0,savingsMatured:0,loansRepaid:0,proposalsSubmitted:0,proposalsApproved:0,praisesReceived:0,helpsGiven:0,selfDiscoveries:0,discoveryCode:null};
+export const emptyGrowthStats:GrowthStats={applications:0,activeJobs:0,taskSubmissions:0,tasksApproved:0,tasksOpen:0,tasksRevision:0,openTaskBuilding:null,salaries:0,purchases:0,savingsJoined:0,savingsMatured:0,loansRepaid:0,proposalsSubmitted:0,proposalsApproved:0,praisesReceived:0,helpsGiven:0,selfDiscoveries:0,discoveryCode:null,checkins:0,checkinStreak:0,checkedInToday:false};
 
 // 행동 하나당 얻는 경험치. 일하기(제출·월급)가 가장 크게, 사회 참여(제안)가 그다음이 되도록.
 export const xpTable=[
@@ -43,6 +46,7 @@ export const xpTable=[
   {key:'helpsGiven',label:'친구 도와주기',xp:40},
   {key:'praisesReceived',label:'칭찬 받기',xp:15},
   {key:'selfDiscoveries',label:'나를 찾는 모험',xp:60},
+  {key:'checkins',label:'출근 도장',xp:10},
 ] as const satisfies readonly {key:keyof GrowthStats;label:string;xp:number}[];
 
 export function xpBreakdown(stats:GrowthStats){
@@ -84,6 +88,9 @@ export function achievements(s:GrowthStats):Achievement[]{
     {id:'hero',icon:'🏅',title:'마을 해결사',desc:'친구의 부탁을 5번 해결했어요',earned:s.helpsGiven>=5},
     {id:'praised',icon:'🌟',title:'칭찬 받은 시민',desc:'친구에게 칭찬 스티커를 받았어요',earned:s.praisesReceived>=1},
     {id:'star',icon:'💫',title:'칭찬 부자',desc:'칭찬 스티커를 10개 받았어요',earned:s.praisesReceived>=10},
+    {id:'checkin-10',icon:'☀️',title:'성실한 출근',desc:'출근 도장을 10번 찍었어요',earned:s.checkins>=10},
+    {id:'checkin-30',icon:'🏆',title:'개근 시민',desc:'출근 도장을 30번 찍었어요',earned:s.checkins>=30},
+    {id:'streak-5',icon:'🔥',title:'5일 연속 출근',desc:'5일(학교 가는 날) 연속으로 출근했어요',earned:s.checkinStreak>=5},
   ];
 }
 

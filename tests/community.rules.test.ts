@@ -175,3 +175,18 @@ describe('학생 번호(학년 안 출석번호)',()=>{
     await assertFails(updateDoc(doc(db('a-one'),'schools/a/students/full'),{number:5,updatedAt:serverTimestamp()}));
   });
 });
+
+describe('출근 도장(Rules)',()=>{
+  it('하루 한 번, 오늘(한국 날짜) 문서만 만들 수 있고 본인과 교사만 본다',async()=>{
+    const {firestoreCheckins}=await import('../src/data/checkinRepository');
+    const {kstDateKey}=await import('../src/domain/checkin');
+    const c=ctx('student','one');const me=firestoreCheckins(db(c.uid),c);
+    await me.checkIn();
+    await expect(me.checkIn()).rejects.toThrow();
+    expect(await me.myDates()).toEqual([kstDateKey()]);
+    await assertFails(setDoc(doc(db('a-one'),'schools/a/checkins/one~2020-1-1'),{schoolId:'a',studentId:'one',date:'2020-1-1',createdAt:serverTimestamp()}));
+    await assertFails(setDoc(doc(db('a-one'),`schools/a/checkins/two~${kstDateKey()}`),{schoolId:'a',studentId:'two',date:kstDateKey(),createdAt:serverTimestamp()}));
+    const t=ctx('teacher');expect(await firestoreCheckins(db(t.uid),t).datesFor('one')).toHaveLength(1);
+    await assertFails(getDoc(doc(db('a-two'),`schools/a/checkins/one~${kstDateKey()}`)));
+  });
+});

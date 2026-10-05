@@ -206,3 +206,38 @@
 /* 레벨 잠금 아이템(D-120) */
 .level-tag{display:inline-block;align-self:center;font-size:.75rem;font-weight:800;border-radius:999px;padding:2px 8px;background:#e3f7ec;color:#1f6b4a}
 .level-tag.locked{background:#f1f3f6;color:#6d7c89}
+/* 출근 도장 · 새 소식(D-122, D-123) */
+.checkin-card{position:fixed;left:16px;bottom:max(16px,env(safe-area-inset-bottom));z-index:40;display:flex;align-items:center;gap:12px;max-width:min(420px,calc(100% - 32px));background:#fffaf0;border:3px solid var(--game-gold);border-radius:20px;padding:12px 14px;box-shadow:0 6px 18px #0002;animation:levelup-pop .4s ease}
+.checkin-card>span{font-size:2rem}
+.checkin-card>div{flex:1;display:flex;flex-direction:column}
+.checkin-card small{color:#7a5a2b}
+.news-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.news-list li{display:flex;align-items:center;gap:12px;background:#fff;border:2px solid #efe3cc;border-radius:16px;padding:10px 12px}
+.news-list li>div{flex:1;display:flex;flex-direction:column;gap:2px}
+.news-list small{color:var(--citizen-muted)}
+.news-icon{font-size:1.6rem}
+/* 성장 보고서(D-124) — 화면에서는 패널, 인쇄할 때는 보고서만 A4로 */
+.growth-report{margin-bottom:16px}
+.print-report{display:flex;flex-direction:column;gap:14px;color:#1f2e45}
+.print-report h3{margin:0 0 6px;font-size:1.05rem}
+.report-head{display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:3px solid var(--game-gold);padding-bottom:10px}
+.report-head h2{margin:0}
+.report-level{display:flex;flex-direction:column;align-items:center;background:#fff8e1;border:2px solid var(--game-gold);border-radius:16px;padding:8px 16px}
+.report-level b{font-size:1.4rem}
+.report-facts{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(2,1fr);gap:6px 18px}
+.report-facts li{display:flex;justify-content:space-between;gap:8px;border-bottom:1px dashed #e0e7f0;padding:4px 0}
+.report-facts b{white-space:nowrap}
+.report-quotes{margin:0;padding-left:18px;line-height:1.7}
+.report-badges{display:flex;flex-wrap:wrap;gap:6px;margin:0}
+.report-badges span{background:#fff8e1;border-radius:999px;padding:3px 10px;font-size:.85rem}
+.report-quote{margin:6px 0 0}
+.report-note{width:100%}
+.report-note-print{display:none}
+@media(max-width:640px){.report-facts{grid-template-columns:1fr}}
+@media print{
+  body.printing-report *{visibility:hidden}
+  body.printing-report .print-report,body.printing-report .print-report *{visibility:visible}
+  body.printing-report .print-report{position:absolute;left:0;top:0;width:100%;padding:12mm}
+  body.printing-report .report-note{display:none}
+  body.printing-report .report-note-print{display:block;min-height:3em;border:1px solid #ccd;border-radius:8px;padding:8px;white-space:pre-wrap}
+}

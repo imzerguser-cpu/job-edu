@@ -2,7 +2,7 @@ import type {StorybookAppearance} from '../../domain/storybook';
 import {firestoreAvatar} from '../../data/avatarRepository';
 import {AvatarStudio} from '../avatar/AvatarStudio';
 import {Avatar} from '../avatar/Avatar';
-import {useCallback,useEffect,useMemo,useState,type ReactNode} from 'react';
+import {useCallback,useEffect,useRef,useMemo,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
 import {listActiveStudents} from '../../data/schoolRepository';
 import {firebase} from '../../data/firebase';
@@ -33,6 +33,8 @@ import {BuildingPlaceholder} from './BuildingPlaceholder';
 import {GameWindow,type GameTab} from './GameWindow';
 import {CharacterHud,GrowthPanel,LevelUpToast,QuestBoard,lastSeenLevel,markLevelSeen} from './CitizenGrowth';
 import {loadGrowthStats} from './growthStats';
+import {firestoreCheckins} from '../../data/checkinRepository';
+import {lastSeenNews,loadNews,markNewsSeen,type NewsItem} from './news';
 import {levelInfo,totalXp,quests,type GrowthStats} from '../../domain/growth';
 import {GuideWorkspace} from './GuideWorkspace';
 import {buildings,type BuildingId} from './buildings';
@@ -58,9 +60,25 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   useEffect(()=>{let alive=true;setStorybook(undefined);avatarStore?.load().then(d=>{if(alive)setStorybook(d.storybook)}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
   const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onSaved={setStorybook} level={stats?levelInfo(totalXp(stats)).level:null} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
   const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
+  const checkinStore=useMemo(()=>firebase?firestoreCheckins(firebase.db,context):undefined,[context]);
+  const [news,setNews]=useState<NewsItem[]|null>(null);
+  const [checkinBusy,setCheckinBusy]=useState(false),[checkinMessage,setCheckinMessage]=useState('');
+  // 처음 쓰는 기기에서는 최근 3일 소식부터 보여 준다.
   useEffect(()=>{
     let alive=true;
-    loadGrowthStats({careerStore:store,taskStore,financeStore,savingsStore,loanStore,proposalStore,communityStore,careerProfileStore},citizen.id).then(next=>{
+    const since=lastSeenNews(citizen.id)??Date.now()-3*86400000;
+    loadNews({taskStore,careerStore:store,financeStore,communityStore},citizen,roster,school.currencyName,since).then(n=>{if(alive)setNews(n)}).catch(()=>{if(alive)setNews([])});
+    return ()=>{alive=false};
+  },[taskStore,store,financeStore,communityStore,citizen,roster,school.currencyName,refresh]);
+  async function checkIn(){
+    if(!checkinStore||checkinBusy)return;setCheckinBusy(true);setCheckinMessage('');
+    try{await checkinStore.checkIn();setCheckinMessage('출근 완료! 오늘도 반가워요 ☀️ +10 XP');setRefresh(n=>n+1)}
+    catch(e){setCheckinMessage((e as Error).message)}
+    finally{setCheckinBusy(false)}
+  }
+  useEffect(()=>{
+    let alive=true;
+    loadGrowthStats({careerStore:store,taskStore,financeStore,savingsStore,loanStore,proposalStore,communityStore,careerProfileStore,checkinStore},citizen.id).then(next=>{
       if(!alive)return;
       setStats(next);
       const info=levelInfo(totalXp(next)),seen=lastSeenLevel(citizen.id);
@@ -69,7 +87,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
       markLevelSeen(citizen.id,info.level);
     });
     return ()=>{alive=false};
-  },[store,taskStore,financeStore,savingsStore,loanStore,proposalStore,communityStore,careerProfileStore,citizen.id,refresh]);
+  },[store,taskStore,financeStore,savingsStore,loanStore,proposalStore,communityStore,careerProfileStore,checkinStore,citizen.id,refresh]);
   useEffect(()=>{
     let alive=true;
     if(firebase)listActiveStudents(firebase.db,context).then(list=>{if(alive)setRoster(list)}).catch(()=>{if(alive)setRoster([citizen])});
@@ -91,6 +109,7 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   let win:ReactNode=null;
   if(view==='guide')win=<GameWindow title="사용 안내서" subtitle="지도에서 시작하는 우리 사회" tabs={[{id:'guide',icon:'❔',label:'안내서',content:<GuideWorkspace store={store} school={school} communityLabel={school.communityName} onClose={closeGuide}/>}]} onClose={closeGuide}/>;
   else if(view==='profile')win=<GameWindow title="내 정보" subtitle="캐릭터와 성장 기록을 확인해요" tabs={[{id:'profile',icon:'👤',label:'내 정보',content:<CharacterHud storybook={storybook} citizen={citizen} community={school.communityName} stats={stats} jobCount={stats?.activeJobs??null} onGuide={()=>setView('guide')} onGrowth={()=>setView('growth')} onPickCharacter={()=>setView('character')} onDiscover={()=>go('mypage','discover')}/>}]} onClose={closeWindow}/>;
+  else if(view==='news')win=<GameWindow title="새 소식" subtitle="내가 없는 동안 생긴 일이에요" tabs={[{id:'news',icon:'🔔',label:'새 소식',content:<NewsList items={news} onGo={go} onSeen={()=>markNewsSeen(citizen.id)}/>}]} onClose={()=>{setNews([]);closeWindow()}}/>;
   else if(view==='quests')win=<GameWindow title="지금 할 수 있는 모험" subtitle="하고 싶은 모험을 누르면 해당 건물로 이동해요" tabs={[{id:'quests',icon:'🧭',label:'모험',content:<QuestBoard stats={stats} onGo={go}/>}]} onClose={closeWindow}/>;
   else if(view==='goals')win=<GameWindow title="우리 반 공동 목표" subtitle="친구들과 함께 이루는 목표예요" tabs={[{id:'goals',icon:'🌱',label:'목표',content:<ClassGoalsBanner key={refresh} store={communityStore}/>}]} onClose={closeWindow}/>;
   else if(view==='places')win=<GameWindow title="건물 목록" subtitle="가고 싶은 건물을 골라요" tabs={[{id:'places',icon:'🏘️',label:'건물',content:<DestinationMenu onNavigate={go}/>}]} onClose={closeWindow}/>;
@@ -124,8 +143,25 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
     win=<GameWindow key={view+'-'+(tab??'')} initialTab={tab} buildingId={building.id} title={building.label} subtitle={building.subtitle} eyebrow={eyebrow} tabs={tabs} onClose={closeWindow}/>;
   }
 
-  return <StudentMapLayout avatar={<Avatar storybook={storybook} grade={citizen.grade} className="toolbar-avatar"/>} name={citizen.name} questCount={stats?quests(stats).length:null} onPanel={setView} onNavigate={go}>
+  return <StudentMapLayout avatar={<Avatar storybook={storybook} grade={citizen.grade} className="toolbar-avatar"/>} name={citizen.name} questCount={stats?quests(stats).length:null} newsCount={news?news.length:null} onPanel={setView} onNavigate={go}>
+    {stats&&checkinStore&&(!stats.checkedInToday||checkinMessage)&&<div className="checkin-card" role="status">
+      {stats.checkedInToday?<><span aria-hidden="true">🔥</span><div><b>{checkinMessage}</b><small>연속 출근 {stats.checkinStreak}일째 · 지금까지 {stats.checkins}일</small></div><button type="button" className="button quiet small" onClick={()=>setCheckinMessage('')}>닫기</button></>
+        :<><span aria-hidden="true">☀️</span><div><b>오늘 출근 도장을 찍어요</b><small>{checkinMessage||(stats.checkinStreak?`어제까지 연속 ${stats.checkinStreak}일 · +10 XP`:'하루 한 번 · +10 XP')}</small></div><button type="button" className="button primary small" disabled={checkinBusy} onClick={checkIn}>{checkinBusy?'찍는 중…':'출근!'}</button></>}
+    </div>}
     {levelUp&&<LevelUpToast level={levelUp.level} title={levelUp.title} onClose={()=>setLevelUp(null)}/>}
     {win}
   </StudentMapLayout>;
+}
+
+function NewsList({items,onGo,onSeen}:{items:NewsItem[]|null;onGo:(id:BuildingId,tab?:string)=>void;onSeen:()=>void}){
+  // 창을 연 순간 읽은 것으로 기록한다("가 보기"로 바로 다른 건물에 가도 다시 뜨지 않게).
+  const seen=useRef(onSeen);seen.current=onSeen;
+  useEffect(()=>{seen.current()},[]);
+  if(!items)return <p role="status">새 소식을 모으고 있어요.</p>;
+  if(!items.length)return <p className="empty">새 소식이 없어요. 오늘도 멋지게 일해 볼까요?</p>;
+  return <ul className="news-list">{items.map(n=><li key={n.id}>
+    <span className="news-icon" aria-hidden="true">{n.icon}</span>
+    <div><b>{n.text}</b><small>{new Date(n.at).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'})}</small></div>
+    {n.target&&<button type="button" className="button secondary small" onClick={()=>onGo(n.target!,n.tab)}>가 보기</button>}
+  </li>)}</ul>;
 }

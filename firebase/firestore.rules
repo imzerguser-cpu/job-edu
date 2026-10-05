@@ -1558,6 +1558,27 @@ service cloud.firestore {
           && d.band==p.band && d.interest==p.interest && d.strengths==p.strengths
           && d.values==p.values && d.code==p.code && d.reflection==p.reflection;
       }
+      // ── 매일 출근 도장(D-122) ── 하루(한국 날짜) 한 번: id가 학생id~연-월-일이어야 하고,
+      // 날짜는 서버 시각+9시간으로 Rules가 직접 계산한다(학생 기기 시계를 믿지 않는다).
+      function checkinCreateOk(checkinId) {
+        let d=request.resource.data;
+        let me=activeStudent(sid) ? callerStudentId(sid) : null;
+        let kst=request.time + duration.value(9, 'h');
+        let today=string(kst.year())+'-'+string(kst.month())+'-'+string(kst.day());
+        return me!=null
+          && d.keys().hasAll(['schoolId','studentId','date','createdAt'])
+          && d.keys().hasOnly(['schoolId','studentId','date','createdAt'])
+          && d.schoolId==sid && d.studentId==me && d.date==today
+          && checkinId==(me+'~'+today)
+          && d.createdAt==request.time;
+      }
+      match /checkins/{checkinId} {
+        // 아직 없는 문서(오늘 처음)도 읽을 수 있어야 하므로 get은 문서 id(학생id~날짜)로 본인을 확인한다.
+        allow get: if teacher(sid) || (activeStudent(sid) && checkinId.matches('^'+callerStudentId(sid)+'~[0-9-]+$'));
+        allow list: if (teacher(sid) || ownStudent(sid,resource.data.studentId)) && request.query.limit!=null && request.query.limit<=400;
+        allow create: if checkinCreateOk(checkinId);
+        allow update, delete: if false;
+      }
       // Each future feature receives explicit rules and emulator tests before activation.
       match /{document=**} { allow read, write: if false; }
     }
