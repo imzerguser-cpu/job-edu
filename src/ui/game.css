@@ -252,3 +252,5 @@
 .setup-confirm h2{font-size:1.3rem;margin-bottom:6px}
 .setup-warning{background:#fff0ef;color:#b03c3c;border-radius:12px;padding:10px 12px;line-height:1.6}
 .setup-confirm .header-actions{justify-content:center;flex-wrap:wrap}
+.gender-request{margin-top:16px;padding:12px 14px;border:1px dashed #d9c39f;border-radius:16px;background:#fffdf7}
+.gender-request h3{margin:0 0 6px;font-size:1rem}

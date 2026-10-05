@@ -832,6 +832,10 @@ service cloud.firestore {
         allow create, update: if ownStudent(sid,studentId) && avatarShape(studentId)
           && (resource == null || !('storybook' in resource.data)
             || ('storybook' in request.resource.data && request.resource.data.storybook.collection == resource.data.storybook.collection));
+        // 교사의 남/여 되돌리기(D-127): storybook만 지울 수 있고 다른 값은 건드릴 수 없다.
+        allow update: if teacher(sid) && 'storybook' in resource.data && !('storybook' in request.resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['storybook','updatedAt'])
+          && request.resource.data.updatedAt==request.time;
         allow delete, list: if false;
         match /items/{itemId} {
           allow get: if teacher(sid) || ownStudent(sid,studentId);
@@ -1581,6 +1585,34 @@ service cloud.firestore {
         allow list: if (teacher(sid) || ownStudent(sid,resource.data.studentId)) && request.query.limit!=null && request.query.limit<=400;
         allow create: if checkinCreateOk(checkinId);
         allow update, delete: if false;
+      }
+      // ── 남학생/여학생 다시 고르기 요청(D-127) ── 학생은 자기 요청만 쓰고(대기 중이 아닐 때 새로),
+      // 교사는 허용·거절만 한다. 실제 되돌리기는 avatars의 교사 전용 규칙(storybook만 삭제)이 맡는다.
+      function avatarResetShape(studentId) {
+        let d=request.resource.data;
+        return d.keys().hasAll(['schoolId','studentId','reason','status','note','decidedBy','createdAt','updatedAt'])
+          && d.keys().hasOnly(['schoolId','studentId','reason','status','note','decidedBy','createdAt','updatedAt'])
+          && d.schoolId==sid && d.studentId==studentId
+          && d.reason is string && d.reason.size()>0 && d.reason.size()<=200
+          && d.status in ['pending','approved','rejected']
+          && d.note is string && d.note.size()<=200
+          && (d.decidedBy==null || d.decidedBy is string)
+          && d.createdAt is timestamp && d.updatedAt==request.time;
+      }
+      match /avatarResetRequests/{studentId} {
+        allow get: if teacher(sid) || ownStudent(sid,studentId);
+        allow list: if teacher(sid) && bounded();
+        allow create: if ownStudent(sid,studentId) && avatarResetShape(studentId)
+          && request.resource.data.status=='pending' && request.resource.data.note=='' && request.resource.data.decidedBy==null
+          && request.resource.data.createdAt==request.time;
+        allow update: if avatarResetShape(studentId) && request.resource.data.createdAt==resource.data.createdAt && (
+          (ownStudent(sid,studentId) && resource.data.status!='pending'
+            && request.resource.data.status=='pending' && request.resource.data.note=='' && request.resource.data.decidedBy==null)
+          ||
+          (teacher(sid) && resource.data.status=='pending' && request.resource.data.status in ['approved','rejected']
+            && request.resource.data.reason==resource.data.reason && request.resource.data.decidedBy==request.auth.uid)
+        );
+        allow delete: if false;
       }
       // Each future feature receives explicit rules and emulator tests before activation.
       match /{document=**} { allow read, write: if false; }

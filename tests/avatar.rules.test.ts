@@ -104,3 +104,37 @@ describe('storybook account integration',()=>{
   expect((await store().load()).balanceMinor).toBe(199000);
  });
 });
+
+describe('남학생/여학생 다시 고르기(D-127)',()=>{
+  const teacherDb=()=>env.authenticatedContext('teacher-a').firestore() as unknown as Firestore;
+  const teacherCtx:SchoolContext={schoolId:'a',uid:'teacher-a',membership:{schoolId:'a',studentId:null,role:'teacher',status:'active'}};
+  const resets=async(who:'one'|'teacher')=>{const {firestoreAvatarResets}=await import('../src/data/avatarResetRepository');return who==='teacher'?firestoreAvatarResets(teacherDb(),teacherCtx):firestoreAvatarResets(db('one'),context('one'))};
+  beforeEach(async()=>{await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'schools/a/members/teacher-a'),{schoolId:'a',studentId:null,role:'teacher',status:'active'})})});
+  it('학생이 요청하고 교사가 허용하면 남/여 선택만 지워져 다시 고를 수 있다',async()=>{
+    const a=defaultStorybook();a.collection='girls';a.style.face=2;
+    await store().saveStorybook(a);
+    const student=await resets('one');
+    await student.request('실수로 잘못 골랐어요');
+    await expect(student.request('또 요청')).rejects.toThrow();
+    const teacher=await resets('teacher');
+    expect((await teacher.pending()).map(r=>r.studentId)).toEqual(['one']);
+    await teacher.approve('one');
+    expect((await store().load()).storybook).toBeUndefined();
+    expect((await student.myRequest())?.status).toBe('approved');
+    await store().saveStorybook({...a,collection:'boys'});
+    expect((await store().load()).storybook?.collection).toBe('boys');
+  });
+  it('교사는 요청 없이도 되돌릴 수 있고 거절도 할 수 있다. 학생은 남의 요청·되돌리기를 못 한다',async()=>{
+    await store().saveStorybook(defaultStorybook());
+    const teacher=await resets('teacher');
+    await teacher.resetNow('one');
+    expect((await store().load()).storybook).toBeUndefined();
+    await store().saveStorybook(defaultStorybook());
+    const student=await resets('one');await student.request('바꾸고 싶어요');
+    await teacher.reject('one','잘 어울려요');
+    expect(await student.myRequest()).toMatchObject({status:'rejected',note:'잘 어울려요'});
+    await assertFails(updateDoc(doc(db('two'),'schools/a/avatars/one'),{storybook:null,updatedAt:serverTimestamp()}));
+    await assertFails(setDoc(doc(db('two'),'schools/a/avatarResetRequests/one'),{schoolId:'a',studentId:'one',reason:'x',status:'pending',note:'',decidedBy:null,createdAt:serverTimestamp(),updatedAt:serverTimestamp()}));
+    await assertFails(updateDoc(doc(db('one'),'schools/a/avatarResetRequests/one'),{status:'approved',decidedBy:'a-one',updatedAt:serverTimestamp()}));
+  });
+});

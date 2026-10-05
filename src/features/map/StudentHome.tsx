@@ -2,6 +2,8 @@ import type {StorybookAppearance} from '../../domain/storybook';
 import {firestoreAvatar} from '../../data/avatarRepository';
 import {AvatarStudio} from '../avatar/AvatarStudio';
 import {CharacterSetup} from '../avatar/CharacterSetup';
+import {StudentGenderRequest} from '../avatar/GenderReset';
+import {firestoreAvatarResets} from '../../data/avatarResetRepository';
 import {Avatar} from '../avatar/Avatar';
 import {useCallback,useEffect,useRef,useMemo,useState,type ReactNode} from 'react';
 import {departmentDisplayName} from '../../domain/jobs';
@@ -61,7 +63,10 @@ export function StudentHome({citizen,school,context,store,taskStore,financeStore
   // 저장된 캐릭터가 없으면(처음 로그인) 지도보다 먼저 캐릭터 만들기를 보여 준다(D-125). 불러오기에 실패하면 막지 않는다.
   const [needsSetup,setNeedsSetup]=useState(false);
   useEffect(()=>{let alive=true;setStorybook(undefined);setNeedsSetup(false);avatarStore?.load().then(d=>{if(alive){setStorybook(d.storybook);setNeedsSetup(!d.storybook)}}).catch(()=>{});return()=>{alive=false}},[avatarStore]);
-  const avatarStudio=(shop=false)=>avatarStore?<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onSaved={setStorybook} level={stats?levelInfo(totalXp(stats)).level:null} onShop={()=>go('store','fashion')}/>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
+  const resetStore=useMemo(()=>firebase?firestoreAvatarResets(firebase.db,context):null,[context]);
+  // 꾸미기 화면(상점 아님) 아래에 남/여 다시 고르기 요청을 붙인다(D-127).
+  const avatarStudio=(shop=false)=>avatarStore?<>{studioOnly(shop)}{!shop&&storybook&&resetStore&&<StudentGenderRequest store={resetStore}/>}</>:<p role="alert">캐릭터 저장소에 연결할 수 없어요. 다시 로그인해 주세요.</p>;
+  const studioOnly=(shop:boolean)=>avatarStore&&<AvatarStudio store={avatarStore} currencySymbol={school.currencyName} shop={shop} grade={citizen.grade} onSaved={setStorybook} level={stats?levelInfo(totalXp(stats)).level:null} onShop={()=>go('store','fashion')}/>;
   const [levelUp,setLevelUp]=useState<{level:number;title:string}|null>(null);
   const checkinStore=useMemo(()=>firebase?firestoreCheckins(firebase.db,context):undefined,[context]);
   const [news,setNews]=useState<NewsItem[]|null>(null);
